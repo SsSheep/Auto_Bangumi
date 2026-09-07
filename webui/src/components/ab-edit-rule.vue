@@ -1,0 +1,639 @@
+<script lang="ts" setup>
+import { NCheckbox, NSelect, NSpin, useMessage } from 'naive-ui';
+import { onKeyStroke } from '@vueuse/core';
+import type { BangumiRule, DetectOffsetResponse } from '#/bangumi';
+
+const emit = defineEmits<{
+  (e: 'apply', rule: BangumiRule): void;
+  (e: 'enable', id: number): void;
+  (e: 'archive', id: number): void;
+  (e: 'unarchive', id: number): void;
+  (
+    e: 'deleteFile',
+    type: 'disable' | 'delete',
+    opts: { id: number; deleteFile: boolean }
+  ): void;
+}>();
+
+const { t } = useMyI18n();
+
+const show = defineModel('show', { default: false });
+const rule = defineModel<BangumiRule>('rule', {
+  required: true,
+});
+
+const message = useMessage();
+
+// Local deep copy for editing (prevents mutation of original)
+const localRule = ref<BangumiRule>(JSON.parse(JSON.stringify(rule.value)));
+
+// Sync when rule changes (e.g., opening different item)
+watch(
+  rule,
+  (newVal) => {
+    localRule.value = JSON.parse(JSON.stringify(newVal));
+  },
+  { deep: true }
+);
+
+const { posterSrc, infoTags, showAdvanced, copied, copyRssLink } =
+  useBangumiRuleForm(localRule);
+const offsetLoading = ref(false);
+const offsetReason = ref('');
+const dismissingReview = ref(false);
+const weekdayLoading = ref(false);
+
+// Delete file dialog state
+const deleteFileDialog = reactive<{
+  show: boolean;
+  type: 'disable' | 'delete';
+}>({
+  show: false,
+  type: 'disable',
+});
+const deleteLocalFiles = ref(false);
+
+watch(show, (val) => {
+  if (!val) {
+    deleteFileDialog.show = false;
+    showAdvanced.value = false;
+    offsetReason.value = '';
+  }
+});
+
+const rssLink = computed(() => localRule.value.rss_link?.[0] || '');
+
+// Air-weekday select — the drag-to-assign board is desktop-pointer-only, so
+// the editor must offer a mobile/keyboard path to the same field.
+const WEEKDAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
+const weekdayOptions = computed(() =>
+  WEEKDAY_KEYS.map((key, index) => ({
+    label: t(`calendar.days.${key}`),
+    value: index,
+  }))
+);
+
+function onWeekdayChange(value: number | null) {
+  localRule.value.air_weekday = value;
+  // Mirror the dedicated setWeekday endpoint: an explicit choice locks the
+  // day against the automatic scanner; clearing unlocks it.
+  localRule.value.weekday_locked = value !== null;
+}
+
+// 自动获取放送星期：bgm.tv 日历优先、TMDB 首播日期兜底，成功后回填表单
+async function fetchWeekday() {
+  if (!localRule.value.id) return;
+  weekdayLoading.value = true;
+  try {
+    await apiBangumi.refreshWeekday(localRule.value.id);
+    const fresh = await apiBangumi.getOne(localRule.value.id);
+    if (fresh.air_weekday != null) {
+      localRule.value.air_weekday = fresh.air_weekday;
+      localRule.value.weekday_locked = false;
+      message.success(t('homepage.rule.weekday_fetched'));
+    } else {
+      message.error(t('homepage.rule.weekday_fetch_none'));
+    }
+  } catch (e) {
+    console.error('Failed to fetch weekday:', e);
+    message.error(t('homepage.rule.weekday_fetch_none'));
+  } finally {
+    weekdayLoading.value = false;
+  }
+}
+
+const episodeTypeOptions = computed(() => [
+  { label: t('homepage.rule.type_episode'), value: 'episode' },
+  { label: t('homepage.rule.type_movie'), value: 'movie' },
+  { label: t('homepage.rule.type_special'), value: 'special' },
+]);
+
+// 常见分辨率作预设，filterable+tag 允许输入任意值
+const resolutionOptions = ['2160p', '1080p', '720p'].map((r) => ({
+  label: r,
+  value: r,
+}));
+
+const selectMenuProps = { role: 'listbox' } as const;
+
+function selectOptionNodeProps() {
+  return { role: 'option' };
+}
+
+// Auto detect offset using the new detectOffset API
+async function autoDetectOffset() {
+  if (!localRule.value.official_title || !localRule.value.season) return;
+  offsetLoading.value = true;
+  offsetReason.value = '';
+  try {
+    const result: DetectOffsetResponse = await apiBangumi.detectOffset({
+      title: localRule.value.official_title,
+      parsed_season: localRule.value.season,
+      parsed_episode: 1,
+    });
+
+    if (result.has_mismatch && result.suggestion) {
+      localRule.value.season_offset = result.suggestion.season_offset;
+      localRule.value.episode_offset = result.suggestion.episode_offset;
+      offsetReason.value = result.suggestion.reason;
+      // Clear needs_review after applying offset
+      localRule.value.needs_review = false;
+      localRule.value.needs_review_reason = null;
+      message.success(t('offset.suggestion_applied'));
+    } else {
+      offsetReason.value = t('offset.no_mismatch');
+      // Clear needs_review if no mismatch detected
+      localRule.value.needs_review = false;
+      localRule.value.needs_review_reason = null;
+      message.info(t('offset.no_mismatch'));
+    }
+  } catch (e) {
+    console.error('Failed to detect offset:', e);
+    message.error(t('offset.detect_failed'));
+  } finally {
+    offsetLoading.value = false;
+  }
+}
+
+// Dismiss the needs_review warning
+async function dismissReview() {
+  if (!localRule.value.id) return;
+  dismissingReview.value = true;
+  try {
+    await apiBangumi.dismissReview(localRule.value.id);
+    localRule.value.needs_review = false;
+    localRule.value.needs_review_reason = null;
+    message.success(t('offset.review_dismissed'));
+  } catch (e) {
+    console.error('Failed to dismiss review:', e);
+    message.error(t('offset.dismiss_failed'));
+  } finally {
+    dismissingReview.value = false;
+  }
+}
+
+const close = () => (show.value = false);
+
+// 种子管理页入口：关闭弹窗后跳转到该规则的种子列表
+const router = useRouter();
+
+function goToTorrents() {
+  close();
+  router.push(`/bangumi-torrents/${rule.value.id}`);
+}
+
+onKeyStroke('Escape', () => {
+  if (!show.value) return;
+  // Inner delete dialog closes first, then the modal itself.
+  if (deleteFileDialog.show) {
+    deleteFileDialog.show = false;
+  } else {
+    close();
+  }
+});
+
+function showDeleteFileDialog() {
+  deleteLocalFiles.value = false;
+  deleteFileDialog.show = true;
+  deleteFileDialog.type = 'delete';
+}
+
+function emitDeleteFile(deleteFile: boolean) {
+  emit('deleteFile', deleteFileDialog.type, {
+    id: rule.value.id,
+    deleteFile,
+  });
+}
+
+function emitApply() {
+  // Copy local changes back to rule before emitting
+  Object.assign(rule.value, localRule.value);
+  emit('apply', rule.value);
+}
+
+function emitEnable() {
+  emit('enable', rule.value.id);
+}
+
+function emitArchive() {
+  emit('archive', rule.value.id);
+}
+
+function emitUnarchive() {
+  emit('unarchive', rule.value.id);
+}
+</script>
+
+<template>
+  <!-- Enable deleted rule dialog -->
+  <ab-modal
+    v-if="rule.deleted"
+    v-model:show="show"
+    size="sm"
+    :title="$t('homepage.rule.enable_rule')"
+  >
+    <div>{{ $t('homepage.rule.enable_hit') }}</div>
+
+    <template #footer>
+      <ab-button size="sm" @click="close">
+        {{ $t('homepage.rule.no_btn') }}
+      </ab-button>
+      <ab-button size="sm" variant="primary" @click="emitEnable">
+        {{ $t('homepage.rule.yes_btn') }}
+      </ab-button>
+    </template>
+  </ab-modal>
+
+  <!-- Main edit modal -->
+  <ab-modal
+    v-else
+    v-model:show="show"
+    :title="$t('homepage.rule.edit_rule')"
+    mobile-fullscreen
+    :avoid-keyboard="false"
+    @close="close"
+  >
+    <!-- Needs Review Warning Banner -->
+    <div
+      v-if="localRule.needs_review"
+      class="review-warning"
+      role="status"
+      :aria-label="$t('offset.needs_review')"
+    >
+      <div class="review-warning-main">
+        <span class="review-warning-emoji">⚠️</span>
+        <div class="review-warning-content">
+          <div class="review-warning-title">
+            {{ $t('offset.needs_review') }}
+          </div>
+          <div
+            v-if="localRule.needs_review_reason"
+            class="review-warning-reason"
+          >
+            {{ localRule.needs_review_reason }}
+          </div>
+        </div>
+      </div>
+      <div class="review-warning-actions">
+        <button
+          class="detect-btn"
+          :disabled="offsetLoading"
+          @click="autoDetectOffset"
+        >
+          <NSpin v-if="offsetLoading" :size="12" />
+          <span v-else>{{ $t('homepage.rule.auto_detect') }}</span>
+        </button>
+        <button
+          class="dismiss-btn"
+          :disabled="dismissingReview"
+          @click="dismissReview"
+        >
+          <NSpin v-if="dismissingReview" :size="12" />
+          <span v-else>{{ $t('offset.dismiss') }}</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="edit-content">
+      <bangumi-preview v-model:rule="localRule" :poster-src="posterSrc" />
+
+      <bangumi-info-tags :tags="infoTags" />
+
+      <bangumi-rss-link-row
+        :link="rssLink"
+        :copied="copied"
+        @copy="copyRssLink(rssLink)"
+      />
+
+      <!-- Advanced settings -->
+      <advanced-section v-model:open="showAdvanced">
+        <bangumi-filter-field v-model="localRule.filter" />
+
+        <bangumi-offset-field
+          v-model="localRule.season_offset"
+          :label="$t('homepage.rule.season_offset')"
+          :hint="$t('homepage.rule.season_offset_hint')"
+        />
+
+        <bangumi-offset-field
+          v-model="localRule.episode_offset"
+          :label="$t('homepage.rule.episode_offset')"
+          :hint="$t('homepage.rule.episode_offset_hint')"
+        >
+          <template #action>
+            <ab-button
+              size="sm"
+              :disabled="offsetLoading || !localRule.official_title"
+              @click="autoDetectOffset"
+            >
+              <NSpin v-if="offsetLoading" :size="12" />
+              <span v-else>{{ $t('homepage.rule.auto_detect') }}</span>
+            </ab-button>
+          </template>
+        </bangumi-offset-field>
+
+        <div class="weekday-row">
+          <label class="weekday-label">{{
+            $t('homepage.rule.air_weekday')
+          }}</label>
+          <div class="weekday-controls">
+            <NSelect
+              :value="localRule.air_weekday ?? null"
+              :options="weekdayOptions"
+              role="combobox"
+              aria-haspopup="listbox"
+              :menu-props="selectMenuProps"
+              :node-props="selectOptionNodeProps"
+              clearable
+              size="small"
+              :placeholder="$t('calendar.unknown')"
+              :aria-label="$t('homepage.rule.air_weekday')"
+              class="weekday-select"
+              @update:value="onWeekdayChange"
+            />
+            <ab-button
+              size="sm"
+              :disabled="weekdayLoading || !localRule.id"
+              :title="$t('homepage.rule.weekday_fetch')"
+              @click="fetchWeekday"
+            >
+              <NSpin v-if="weekdayLoading" :size="12" />
+              <span v-else>{{ $t('homepage.rule.weekday_fetch') }}</span>
+            </ab-button>
+          </div>
+        </div>
+
+        <div class="weekday-row">
+          <label class="weekday-label">{{
+            $t('homepage.rule.episode_type')
+          }}</label>
+          <NSelect
+            v-model:value="localRule.episode_type"
+            :options="episodeTypeOptions"
+            role="combobox"
+            aria-haspopup="listbox"
+            :menu-props="selectMenuProps"
+            :node-props="selectOptionNodeProps"
+            size="small"
+            :aria-label="$t('homepage.rule.episode_type')"
+            class="weekday-select"
+          />
+        </div>
+
+        <bangumi-check-schedule-field
+          v-model:interval="localRule.check_interval"
+          v-model:weekdays="localRule.check_weekdays"
+          v-model:time="localRule.check_time"
+        />
+
+        <div class="weekday-row">
+          <label class="weekday-label">{{
+            $t('homepage.rule.preferred_group')
+          }}</label>
+          <ab-input
+            :model-value="localRule.preferred_group ?? ''"
+            type="text"
+            class="preferred-input"
+            placeholder="ANi"
+            :aria-label="$t('homepage.rule.preferred_group')"
+            @update:model-value="localRule.preferred_group = String($event)"
+          />
+        </div>
+
+        <div class="weekday-row">
+          <label class="weekday-label">{{
+            $t('homepage.rule.preferred_resolution')
+          }}</label>
+          <NSelect
+            v-model:value="localRule.preferred_resolution"
+            :options="resolutionOptions"
+            role="combobox"
+            aria-haspopup="listbox"
+            :menu-props="selectMenuProps"
+            :node-props="selectOptionNodeProps"
+            clearable
+            filterable
+            tag
+            size="small"
+            :placeholder="$t('homepage.rule.auto_detect')"
+            :aria-label="$t('homepage.rule.preferred_resolution')"
+            class="weekday-select"
+          />
+        </div>
+
+        <p class="preferred-hint">
+          {{ $t('homepage.rule.preferred_hint') }}
+        </p>
+      </advanced-section>
+    </div>
+
+    <!-- 删除确认：嵌套在主弹窗组件树内，headlessui 才会把外层的
+         Escape/遮罩点击挂起，只关闭内层 -->
+    <!-- Delete confirmation dialog -->
+    <ab-modal
+      v-model:show="deleteFileDialog.show"
+      size="sm"
+      :title="$t('homepage.rule.delete')"
+    >
+      <p class="delete-message">
+        {{ $t('homepage.rule.delete_confirm') }}
+      </p>
+      <NCheckbox v-model:checked="deleteLocalFiles" class="delete-files-option">
+        {{ $t('homepage.rule.delete_files_label') }}
+      </NCheckbox>
+
+      <template #footer>
+        <ab-button size="sm" @click="deleteFileDialog.show = false">
+          {{ $t('homepage.rule.cancel_btn') }}
+        </ab-button>
+        <ab-button
+          size="sm"
+          variant="danger"
+          @click="emitDeleteFile(deleteLocalFiles)"
+        >
+          {{ $t('homepage.rule.delete') }}
+        </ab-button>
+      </template>
+    </ab-modal>
+
+    <template #footer>
+      <ab-button size="sm" variant="ghost" @click="goToTorrents">
+        {{ $t('homepage.rule.view_torrents') }}
+      </ab-button>
+      <ab-button v-if="localRule.archived" size="sm" @click="emitUnarchive">
+        {{ $t('homepage.rule.unarchive') }}
+      </ab-button>
+      <ab-button v-else size="sm" @click="emitArchive">
+        {{ $t('homepage.rule.archive') }}
+      </ab-button>
+      <ab-button
+        size="sm"
+        variant="danger"
+        class="footer-delete"
+        @click="showDeleteFileDialog"
+      >
+        {{ $t('homepage.rule.delete') }}
+      </ab-button>
+      <ab-button variant="primary" size="sm" @click="emitApply">
+        {{ $t('homepage.rule.apply') }}
+      </ab-button>
+    </template>
+  </ab-modal>
+</template>
+
+<style lang="scss" scoped>
+// Review warning banner
+.review-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  margin: 12px 20px;
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-md);
+}
+
+.review-warning-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.review-warning-emoji {
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.review-warning-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.review-warning-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-warning-text);
+}
+
+.review-warning-reason {
+  font-size: 12px;
+  color: var(--color-warning-text-secondary);
+  line-height: 1.3;
+  margin-top: 2px;
+}
+
+.review-warning-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.review-warning-actions .detect-btn,
+.review-warning-actions .dismiss-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0 14px;
+  font-size: 13px;
+  font-family: inherit;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--transition-fast);
+
+  &:disabled {
+    cursor: wait;
+  }
+}
+
+.review-warning-actions .detect-btn {
+  min-width: 90px;
+  color: #fff;
+  background: var(--color-primary);
+  border: none;
+
+  &:hover:not(:disabled) {
+    background: var(--color-primary-hover);
+  }
+}
+
+.review-warning-actions .dismiss-btn {
+  min-width: 70px;
+  color: var(--color-text-secondary);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+
+  &:hover:not(:disabled) {
+    border-color: var(--color-text-muted);
+    color: var(--color-text);
+  }
+}
+
+.edit-content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+// 归档/删除靠左，应用靠右
+.footer-delete {
+  margin-right: auto;
+}
+
+// Footer
+// Delete confirmation dialog
+.delete-message {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  margin: 0 0 12px;
+}
+
+.delete-files-option {
+  margin-bottom: 20px;
+}
+
+.weekday-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+}
+
+.weekday-label {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+.weekday-select {
+  width: 160px;
+  flex-shrink: 0;
+}
+
+.weekday-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.preferred-input {
+  width: 160px;
+  flex-shrink: 0;
+}
+
+.preferred-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+</style>

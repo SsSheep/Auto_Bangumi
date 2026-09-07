@@ -1,0 +1,247 @@
+import sys
+
+import pytest
+
+from module.models.torrent import SubtitleFile
+from module.parser.analyser import torrent_parser
+from module.parser.analyser.raw_parser import raw_parser
+from module.parser.analyser.torrent_parser import get_path_basename
+
+ISSUE_1072_TITLE = (
+    "[SubsPlease] Haibara-kun no Tsuyokute Seishun New Game - 06v2 "
+    "(1080p) [E931DD98].mkv"
+)
+
+
+def test_torrent_parser():
+    file_name = "[Lilith-Raws] Boku no Kokoro no Yabai Yatsu - 01 [Baha][WEB-DL][1080p][AVC AAC][CHT][MP4].mp4"
+    bf = torrent_parser(file_name)
+    assert bf is not None
+    assert bf.title == "Boku no Kokoro no Yabai Yatsu"
+    assert bf.group == "Lilith-Raws"
+    assert bf.episode == 1
+    assert bf.season == 1
+
+    file_name = "[Sakurato] Tonikaku Kawaii S2 [01][AVC-8bit 1080p AAC][CHS].mp4"
+    bf = torrent_parser(file_name)
+    assert bf is not None
+    assert bf.title == "Tonikaku Kawaii"
+    assert bf.group == "Sakurato"
+    assert bf.episode == 1
+    assert bf.season == 2
+
+    file_name = "[SweetSub&LoliHouse] Heavenly Delusion - 01 [WebRip 1080p HEVC-10bit AAC ASSx2].mkv"
+    bf = torrent_parser(file_name)
+    assert bf is not None
+    assert bf.title == "Heavenly Delusion"
+    assert bf.group == "SweetSub&LoliHouse"
+    assert bf.episode == 1
+    assert bf.season == 1
+
+    file_name = "[SBSUB][CONAN][1082][V2][1080P][AVC_AAC][CHS_JP](C1E4E331).mp4"
+    bf = torrent_parser(file_name)
+    assert bf is not None
+    assert bf.title == "CONAN"
+    assert bf.group == "SBSUB"
+    assert bf.episode == 1082
+    assert bf.season == 1
+
+    file_name = "海盗战记 (2019) S01E01.mp4"
+    bf = torrent_parser(file_name)
+    assert bf is not None
+    assert bf.title == "海盗战记 (2019)"
+    assert bf.episode == 1
+    assert bf.season == 1
+
+    file_name = "海盗战记/海盗战记 S01E01.mp4"
+    bf = torrent_parser(file_name)
+    assert bf is not None
+    assert bf.title == "海盗战记"
+    assert bf.episode == 1
+    assert bf.season == 1
+
+    file_name = "海盗战记 S01E01.zh-tw.ass"
+    sf = torrent_parser(file_name, file_type="subtitle")
+    assert isinstance(sf, SubtitleFile)
+    assert sf.title == "海盗战记"
+    assert sf.episode == 1
+    assert sf.season == 1
+    assert sf.language == "zh-tw"
+
+    file_name = "海盗战记 S01E01.SC.ass"
+    sf = torrent_parser(file_name, file_type="subtitle")
+    assert isinstance(sf, SubtitleFile)
+    assert sf.title == "海盗战记"
+    assert sf.season == 1
+    assert sf.episode == 1
+    assert sf.language == "zh"
+
+    file_name = "水星的魔女(2022) S00E19.mp4"
+    bf = torrent_parser(file_name, season=0)
+    assert bf is not None
+    assert bf.title == "水星的魔女(2022)"
+    assert bf.season == 0
+    assert bf.episode == 19
+
+    file_name = "【失眠搬运组】放学后失眠的你-Kimi wa Houkago Insomnia - 06 [bilibili - 1080p AVC1 CHS-JP].mp4"
+    bf = torrent_parser(file_name, season=1)
+    assert bf is not None
+    assert bf.title == "放学后失眠的你-Kimi wa Houkago Insomnia"
+    assert bf.season == 1
+    assert bf.episode == 6
+
+    file_name = "不时用俄语小声说真心话的邻桌艾莉同学 S01E02.mp4"
+    bf = torrent_parser(file_name)
+    assert bf is not None
+    assert bf.title == "不时用俄语小声说真心话的邻桌艾莉同学"
+    assert bf.season == 1
+    assert bf.episode == 2
+
+    file_name = "[ANi] 關於我轉生變成史萊姆這檔事 第三季 - 48.5 [1080P][Baha][WEB-DL][AAC AVC][CHT].mp4"
+    bf = torrent_parser(file_name, season=3)
+    assert bf is not None
+    assert bf.title == "關於我轉生變成史萊姆這檔事 第三季"
+    assert bf.season == 3
+    assert bf.episode == 48.5
+
+    file_name = "[ANi] 關於我轉生變成史萊姆這檔事 第三季 - 48.5 [1080P][Baha][WEB-DL][AAC AVC][CHT].srt"
+    sf = torrent_parser(file_name, season=3, file_type="subtitle")
+    assert isinstance(sf, SubtitleFile)
+    assert sf.title == "關於我轉生變成史萊姆這檔事 第三季"
+    assert sf.episode == 48.5
+    assert sf.season == 3
+    assert sf.language == "zh-tw"
+
+    # EP number format — RULES[4] EP? branch (untested without dash separator)
+    file_name = "[Ohys-Raws] Kamen Rider Gaim EP33 (TV-Asahi 1280x720 x264 AAC).mp4"
+    bf = torrent_parser(file_name)
+    assert bf is not None
+    assert bf.title == "Kamen Rider Gaim"
+    assert bf.group == "Ohys-Raws"
+    assert bf.episode == 33
+    assert bf.season == 1
+
+    # "tc" language code → zh-tw (SUBTITLE_LANG["zh-tw"] includes "tc")
+    file_name = "葬送的芙莉莲 S01E05.tc.ass"
+    sf = torrent_parser(file_name, file_type="subtitle")
+    assert isinstance(sf, SubtitleFile)
+    assert sf.title == "葬送的芙莉莲"
+    assert sf.season == 1
+    assert sf.episode == 5
+    assert sf.language == "zh-tw"
+
+    # Subtitle with no language code → SubtitleFile.language requires str; raises ValidationError
+    file_name = "Dungeon Meshi S01E01.srt"
+    with pytest.raises(Exception):
+        torrent_parser(file_name, file_type="subtitle")
+
+    # Full absolute multi-level path — get_path_basename strips all directories
+    file_name = (
+        "/downloads/Bangumi/葬送的芙莉莲 (2023)/Season 1/葬送的芙莉莲 S01E05.mp4"
+    )
+    bf = torrent_parser(file_name)
+    assert bf is not None
+    assert bf.title == "葬送的芙莉莲"
+    assert bf.season == 1
+    assert bf.episode == 5
+
+    # Version suffix [NNvN] — RULES[1] (?:v\d{1,2})? branch (v2 supported but untested)
+    file_name = (
+        "[Sakurato] Kaguya-sama wa Kokurasetai [12v2][AVC-8bit 1080p AAC][CHS].mp4"
+    )
+    bf = torrent_parser(file_name)
+    assert bf is not None
+    assert bf.title == "Kaguya-sama wa Kokurasetai"
+    assert bf.group == "Sakurato"
+    assert bf.episode == 12
+    assert bf.season == 1
+
+
+class TestIssue1072VersionedEpisode:
+    def test_versioned_dash_episode_wins_before_crc_token(self):
+        episode = raw_parser(ISSUE_1072_TITLE)
+
+        assert episode is not None
+        assert episode.title_en == "Haibara-kun no Tsuyokute Seishun New Game"
+        assert episode.season == 1
+        assert episode.episode == 6
+        assert episode.group == "SubsPlease"
+        assert episode.episode_type == "episode"
+
+    @pytest.mark.parametrize(
+        ("token", "expected_episode"),
+        [
+            ("- 06", 6),
+            ("[06v2]", 6),
+            ("E13", 13),
+            ("EP13", 13),
+        ],
+    )
+    def test_supported_episode_tokens_remain_valid(self, token, expected_episode):
+        episode = raw_parser(
+            f"[SubsPlease] Haibara-kun no Tsuyokute Seishun New Game "
+            f"{token} [1080p].mkv"
+        )
+
+        assert episode is not None
+        assert episode.episode == expected_episode
+
+    def test_crc_token_is_not_an_episode_signal(self):
+        episode = raw_parser(
+            "[SubsPlease] Haibara-kun no Tsuyokute Seishun New Game "
+            "(1080p) [E931DD98].mkv"
+        )
+
+        assert episode is None
+
+    def test_title_without_episode_signal_remains_unparseable(self):
+        assert (
+            raw_parser(
+                "[SubsPlease] Haibara-kun no Tsuyokute Seishun New Game " "[1080p].mkv"
+            )
+            is None
+        )
+
+
+class TestMovieFile:
+    """episode_type='movie' bypasses episode-number regex matching entirely —
+    a movie file's name has no SxxExx / episode marker to match against."""
+
+    def test_parses_movie_without_episode_marker(self):
+        file_name = "/downloads/Bangumi/天气之子 (2019)/[Lilith-Raws] 天气之子 [Baha][WEB-DL][1080p][MP4].mp4"
+        bf = torrent_parser(file_name, episode_type="movie")
+        assert bf is not None
+        assert bf.episode_type == "movie"
+        assert bf.group == "Lilith-Raws"
+        assert "天气之子" in bf.title
+        assert "[" not in bf.title
+        assert bf.suffix == ".mp4"
+
+    def test_movie_subtitle_file(self):
+        file_name = "天气之子.zh.ass"
+        sf = torrent_parser(file_name, file_type="subtitle", episode_type="movie")
+        assert sf is not None
+        assert sf.episode_type == "movie"
+        assert sf.suffix == ".ass"
+
+    def test_regular_episode_type_unaffected(self):
+        """episode_type defaults to 'episode', existing RULES-based parsing unchanged."""
+        file_name = "[Lilith-Raws] Boku no Kokoro no Yabai Yatsu - 01 [Baha][WEB-DL][1080p][AVC AAC][CHT][MP4].mp4"
+        bf = torrent_parser(file_name)
+        assert bf is not None
+        assert bf.episode_type == "episode"
+
+
+class TestGetPathBasename:
+    def test_regular_path(self):
+        assert get_path_basename("/path/to/file.txt") == "file.txt"
+
+    def test_empty_path(self):
+        assert get_path_basename("") == ""
+
+    def test_path_with_trailing_slash(self):
+        assert get_path_basename("/path/to/folder/") == "folder"
+
+    @pytest.mark.skipif(not sys.platform.startswith("win"), reason="Windows specific")
+    def test_windows_path(self):
+        assert get_path_basename("C:\\path\\to\\file.txt") == "file.txt"

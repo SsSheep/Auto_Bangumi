@@ -1,0 +1,413 @@
+name: Build Docker
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+    branches:
+      - main
+      - "3.*-dev"
+  push:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      - name: Install dependencies
+        run: cd backend && uv sync --group dev
+      - name: Lint
+        run: cd backend && uv run ruff check src
+      - name: Type check
+        run: cd backend && uv run mypy src
+      - name: Test
+        run: |
+          mkdir -p backend/config
+          cd backend && uv run pytest src/test -v -m "not e2e"
+
+  webui-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: pnpm/action-setup@v4
+        name: Install pnpm
+        with:
+          version: 9
+          run_install: false
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - uses: actions/cache@v4
+        name: Setup pnpm cache
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        run: cd webui && pnpm install
+
+      - name: Lint
+        run: cd webui && pnpm lint
+
+      - name: Unit test
+        run: cd webui && pnpm test
+
+      - name: build test
+        run: |
+          cd webui && pnpm test:build
+
+  version-info:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # 发布只由手动推送 tag 触发：
+      #   - 稳定版：语义化版本号 tag（如 3.3.2），且必须打在 main 的提交上
+      #   - 预发布：包含 alpha/beta 的 tag（如 3.4.0-beta.1），在 dev 分支上打
+      # 合并 PR 不再触发发布（防止 PR 标题被当作版本号，见 #1065）。
+      - name: Classify trigger
+        id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: python3 scripts/classify_release.py --output "$GITHUB_OUTPUT"
+      - name: Check result
+        run: |
+          echo "release: ${{ steps.classify.outputs.release }}"
+          echo "dev: ${{ steps.classify.outputs.dev }}"
+          echo "build_test: ${{ steps.classify.outputs.build_test }}"
+          echo "version: ${{ steps.classify.outputs.version }}"
+    outputs:
+      release: ${{ steps.classify.outputs.release }}
+      dev: ${{ steps.classify.outputs.dev }}
+      build_test: ${{ steps.classify.outputs.build_test }}
+      version: ${{ steps.classify.outputs.version }}
+
+  build-webui:
+    runs-on: ubuntu-latest
+    needs: [test, webui-test, version-info]
+    if: ${{ needs.version-info.outputs.release == 1 || needs.version-info.outputs.dev == 1 || needs.version-info.outputs.build_test == 1 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: pnpm/action-setup@v4
+        name: Install pnpm
+        with:
+          version: 9
+          run_install: false
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - uses: actions/cache@v4
+        name: Setup pnpm cache
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        run: cd webui && pnpm install
+
+      - name: Build
+        run: |
+          cd webui && pnpm build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: webui/dist
+
+  build-docker:
+    runs-on: ubuntu-latest
+    needs: [build-webui, version-info]
+    if: ${{ needs.version-info.outputs.release == 1 || needs.version-info.outputs.dev == 1 || needs.version-info.outputs.build_test == 1 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create Version info via tag
+        working-directory: ./backend/src
+        run: |
+          echo ${{ needs.version-info.outputs.version }}
+          echo "VERSION='${{ needs.version-info.outputs.version }}'" >> module/__version__.py
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker metadata main
+        if: ${{ needs.version-info.outputs.release == 1 && needs.version-info.outputs.dev != 1 }}
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            estrellaxd/auto_bangumi
+            ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ needs.version-info.outputs.version }}
+            type=raw,value=latest
+
+      - name: Docker metadata dev
+        if: ${{ needs.version-info.outputs.dev == 1 }}
+        id: meta-dev
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            estrellaxd/auto_bangumi
+            ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ needs.version-info.outputs.version }}
+            type=raw,value=dev-latest
+
+      - name: Login to DockerHub
+        if: ${{ needs.version-info.outputs.release == 1 }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      - name: Login to ghcr.io
+        if: ${{ needs.version-info.outputs.release == 1 }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ACCESS_TOKEN }}
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: backend/src/dist
+
+      - name: Build and push
+        if: ${{ needs.version-info.outputs.release == 1 && needs.version-info.outputs.dev != 1 }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          builder: ${{ steps.buildx.outputs.name }}
+          platforms: linux/amd64,linux/arm64
+          push: True
+          build-args: |
+            VERSION=${{ needs.version-info.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ github.workflow }}
+          cache-to: type=gha,scope=${{ github.workflow }},ignore-error=true
+
+      - name: Build and push dev
+        if: ${{ needs.version-info.outputs.dev == 1 }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          builder: ${{ steps.buildx.outputs.name }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' }}
+          build-args: |
+            VERSION=${{ needs.version-info.outputs.version }}
+          tags: ${{ steps.meta-dev.outputs.tags }}
+          labels: ${{ steps.meta-dev.outputs.labels }}
+          cache-from: type=gha,scope=${{ github.workflow }}
+          cache-to: type=gha,scope=${{ github.workflow }},ignore-error=true
+
+      - name: Build test
+        if: ${{ needs.version-info.outputs.release == 0 }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          builder: ${{ steps.buildx.outputs.name }}
+          platforms: linux/amd64,linux/arm64
+          push: false
+          build-args: |
+            VERSION=${{ needs.version-info.outputs.version }}
+          tags: estrellaxd/auto_bangumi:test
+          cache-from: type=gha,scope=${{ github.workflow }}
+          cache-to: type=gha,scope=${{ github.workflow }},ignore-error=true
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-docker, version-info]
+    if: ${{ needs.version-info.outputs.release == 1 }}
+    outputs:
+      url: ${{ steps.release.outputs.url }}
+      version: ${{ needs.version-info.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifact webui
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: webui/dist
+
+      - name: Zip webui
+        run: |
+          cd webui && ls -al && tree && zip -r dist.zip dist
+
+      - name: Download artifact app
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: backend/src/dist
+
+      - name: Create Version info via tag
+        working-directory: ./backend/src
+        run: |
+          echo ${{ needs.version-info.outputs.version }}
+          echo "VERSION='${{ needs.version-info.outputs.version }}'" >> module/__version__.py
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Generate requirements.txt for non-uv consumers (#994)
+        run: |
+          cd backend && uv export --format requirements-txt --no-hashes --no-dev -o requirements.txt
+
+      - name: Zip app
+        run: |
+          cd backend && zip -r app-v${{ needs.version-info.outputs.version }}.zip \
+            src pyproject.toml uv.lock requirements.txt
+
+      # 在线自动更新 bundle：module 源码树 + pyproject/uv.lock + 前端 dist + manifest。
+      # 同时产出 .sha256（客户端下载后据此校验完整性）。min_image_version 是能应用
+      # 此 bundle 布局的最低镜像版本（引入在线更新的首个版本）。
+      - name: Build update bundle
+        run: |
+          VERSION="${{ needs.version-info.outputs.version }}"
+          MIN_IMAGE_VERSION="3.3.0-beta.1"
+          STAGE="bundle_stage"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE/backend/src" "$STAGE/webui-dist"
+          cp -r backend/src/module "$STAGE/backend/src/module"
+          cp backend/pyproject.toml backend/uv.lock "$STAGE/backend/"
+          cp -r webui/dist/. "$STAGE/webui-dist/"
+          LOCK_SHA=$(sha256sum backend/uv.lock | awk '{print $1}')
+          cat > "$STAGE/manifest.json" <<EOF
+          {
+            "version": "$VERSION",
+            "min_image_version": "$MIN_IMAGE_VERSION",
+            "lockfile_sha256": "$LOCK_SHA",
+            "notes": "See release notes."
+          }
+          EOF
+          ( cd "$STAGE" && zip -r "../update-bundle-${VERSION}.zip" backend webui-dist manifest.json )
+          sha256sum "update-bundle-${VERSION}.zip" | awk '{print $1}' > "update-bundle-${VERSION}.zip.sha256"
+
+      # 对 bundle 做 ed25519 签名（私钥在 UPDATE_SIGNING_KEY secret，公钥随镜像
+      # 分发）。客户端 apply 前验签，boot_overlay 每次启动重新验签——没有 .sig
+      # 的 release 会被更新器拒绝，所以签名失败必须让构建失败。
+      - name: Sign update bundle
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "::error::UPDATE_SIGNING_KEY secret is not set; unsigned bundles are rejected by the updater" >&2
+            exit 1
+          fi
+          VERSION="${{ needs.version-info.outputs.version }}"
+          uv run --no-project --with cryptography python - "update-bundle-${VERSION}.zip" <<'PY'
+          import base64, os, sys
+          from pathlib import Path
+          from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+          bundle = Path(sys.argv[1])
+          key = load_pem_private_key(os.environ["UPDATE_SIGNING_KEY"].encode(), password=None)
+          sig = key.sign(bundle.read_bytes())
+          Path(str(bundle) + ".sig").write_text(base64.b64encode(sig).decode() + "\n")
+          print(f"signed {bundle}")
+          PY
+
+      - name: Generate Release info
+        id: release-info
+        run: |
+          if ${{ needs.version-info.outputs.dev == 1 }}; then
+            echo "version=🌙${{ needs.version-info.outputs.version }}" >> $GITHUB_OUTPUT
+            echo "pre_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "version=🌟${{ needs.version-info.outputs.version }}" >> $GITHUB_OUTPUT
+            echo "pre_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Read changelog
+        id: changelog
+        run: |
+          # Derive the changelog file from the release version's major.minor (e.g. 3.3.0-beta.1 -> 3.3.md)
+          CHANGELOG_VERSION=$(echo "${{ needs.version-info.outputs.version }}" | grep -oE '^[0-9]+\.[0-9]+')
+          CHANGELOG_FILE="docs/changelog/${CHANGELOG_VERSION}.md"
+          if [ -f "$CHANGELOG_FILE" ]; then
+            echo "body<<EOF" >> $GITHUB_OUTPUT
+            cat "$CHANGELOG_FILE" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Release
+        id: release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.version-info.outputs.version }}
+          name: ${{ steps.release-info.outputs.version }}
+          body: ${{ steps.changelog.outputs.body }}
+          draft: false
+          prerelease: ${{ steps.release-info.outputs.pre_release == 'true' }}
+          files: |
+            webui/dist.zip
+            backend/app-v${{ needs.version-info.outputs.version }}.zip
+            update-bundle-${{ needs.version-info.outputs.version }}.zip
+            update-bundle-${{ needs.version-info.outputs.version }}.zip.sha256
+            update-bundle-${{ needs.version-info.outputs.version }}.zip.sig
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+
+  telegram:
+    runs-on: ubuntu-latest
+    needs: [release]
+    steps:
+      - name: send telegram message on push
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_TO }}
+          token: ${{ secrets.TELEGRAM_TOKEN }}
+          message: |
+            New release: ${{ needs.release.outputs.version }}
+            Link: ${{ needs.release.outputs.url }}

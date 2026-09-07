@@ -1,0 +1,97 @@
+{
+    "program": {
+        "rss_time": 900,
+        "rename_time": 60,
+        "webui_port": 7892
+    },
+    "downloader": {
+        "type": "qbittorrent",
+        "host": "172.17.0.1:8080",
+        "username": "admin",
+        "password": "adminadmin",
+        "path": "/downloads/Bangumi",
+        "ssl": false
+    },
+    "rss_parser": {
+        "enable": true,
+        "filter": [
+            "720",
+            "\\d+-\\d+"
+        ],
+        "language": "zh",
+        "engine": "classic"
+    },
+    "bangumi_manage": {
+        "enable": true,
+        "eps_complete": false,
+        "rename_method": "pn",
+        "group_tag": false,
+        "remove_bad_torrent": false,
+        "revision_conflict_policy": "hold",
+        "track_orphans": true
+    },
+    "log": {
+        "debug_enable": false
+    },
+    "network": {
+        "tmdb_base_url": "https://api.themoviedb.org",
+        "tmdb_api_key": "",
+        "bgm_base_url": "https://api.bgm.tv"
+    },
+    "proxy": {
+        "enable": false,
+        "type": "http",
+        "host": "",
+        "port": 0,
+        "username": "",
+        "password": ""
+    },
+    "media_library": {
+        "jellyfin_enable": false,
+        "jellyfin_host": "",
+        "jellyfin_api_key": ""
+    },
+    "notification": {
+        "enable": false,
+        "providers": [],
+        "base_url": "",
+        "type": null,
+        "token": null,
+        "chat_id": null
+    },
+    "llm": {
+        "enable": false,
+        "provider": "openai",
+        "api_key": "",
+        "model": "gpt-5-mini",
+        "base_url": "",
+        "mode": "fallback",
+        "timeout": 20.0,
+        "cache_ttl": 900,
+        "max_concurrency": 2,
+        "failure_threshold": 3,
+        "failure_backoff": 300,
+        "providers": {}
+    },
+    "experimental_openai": {
+        "enable": false,
+        "api_key": "",
+        "api_base": "https://api.openai.com/v1",
+        "api_type": "openai",
+        "api_version": "2023-05-15",
+        "model": "gpt-3.5-turbo",
+        "deployment_id": ""
+    },
+    "security": {
+        "login_whitelist": [],
+        "login_tokens": [],
+        "mcp_whitelist": [],
+        "mcp_tokens": [],
+        "webauthn_rp_id": "",
+        "webauthn_origin": ""
+    },
+    "update": {
+        "channel": "stable",
+        "auto_check": true
+    }
+}

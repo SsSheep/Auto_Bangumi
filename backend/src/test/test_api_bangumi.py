@@ -1,0 +1,214 @@
+"""Tests for Bangumi API endpoints."""
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from module.api import v1
+from module.database import get_db
+from module.models import ResponseModel
+from module.security.api import get_current_user
+from test.factories import make_bangumi
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_db():
+    """A stand-in Database whose repos can be configured with AsyncMocks."""
+    return MagicMock()
+
+
+@pytest.fixture
+def app(mock_db):
+    """Create a FastAPI app with v1 routes for testing."""
+    app = FastAPI()
+    app.include_router(v1, prefix="/api")
+
+    async def _override_get_db():
+        yield mock_db
+
+    app.dependency_overrides[get_db] = _override_get_db
+    return app
+
+
+@pytest.fixture
+def authed_client(app):
+    """TestClient with auth dependency overridden."""
+
+    async def mock_user():
+        return "testuser"
+
+    app.dependency_overrides[get_current_user] = mock_user
+    client = TestClient(app)
+    yield client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def unauthed_client(app):
+    """TestClient without auth (no override)."""
+    return TestClient(app)
+
+
+# ---------------------------------------------------------------------------
+# Auth requirement
+# ---------------------------------------------------------------------------
+
+
+class TestAuthRequired:
+    @patch("module.security.api.DEV_AUTH_BYPASS", False)
+    def test_get_all_unauthorized(self, unauthed_client):
+        """GET /bangumi/get/all without auth returns 401."""
+        response = unauthed_client.get("/api/v1/bangumi/get/all")
+        assert response.status_code == 401
+
+    @patch("module.security.api.DEV_AUTH_BYPASS", False)
+    def test_get_by_id_unauthorized(self, unauthed_client):
+        """GET /bangumi/get/1 without auth returns 401."""
+        response = unauthed_client.get("/api/v1/bangumi/get/1")
+        assert response.status_code == 401
+
+    @patch("module.security.api.DEV_AUTH_BYPASS", False)
+    def test_delete_unauthorized(self, unauthed_client):
+        """DELETE /bangumi/delete/1 without auth returns 401."""
+        response = unauthed_client.delete("/api/v1/bangumi/delete/1")
+        assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# GET endpoints
+# ---------------------------------------------------------------------------
+
+
+class TestGetBangumi:
+    def test_get_all(self, authed_client, mock_db):
+        """GET /bangumi/get/all returns list of Bangumi."""
+        mock_bangumi = [make_bangumi(id=1), make_bangumi(id=2, title_raw="Other")]
+        mock_db.bangumi.search_all = AsyncMock(return_value=mock_bangumi)
+
+        response = authed_client.get("/api/v1/bangumi/get/all")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 2
+
+    def test_get_by_id(self, authed_client):
+        """GET /bangumi/get/{id} returns single Bangumi."""
+        bangumi = make_bangumi(id=1, official_title="Found Anime")
+        with patch("module.api.bangumi.TorrentManager") as MockManager:
+            mock_mgr = MockManager.return_value
+            mock_mgr.search_one = AsyncMock(return_value=bangumi)
+
+            response = authed_client.get("/api/v1/bangumi/get/1")
+
+        assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# PATCH/UPDATE endpoints
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateBangumi:
+    def test_update_success(self, authed_client):
+        """PATCH /bangumi/update/{id} updates and returns success."""
+        resp_model = ResponseModel(
+            status=True, status_code=200, msg_en="Updated.", msg_zh="已更新。"
+        )
+        with patch("module.api.bangumi.TorrentManager") as MockManager:
+            mock_mgr = MockManager.return_value
+            mock_mgr.update_rule = AsyncMock(return_value=resp_model)
+
+            # BangumiUpdate requires all fields
+            update_data = {
+                "official_title": "New Title",
+                "title_raw": "new_raw",
+                "season": 1,
+                "year": "2024",
+                "season_raw": "",
+                "group_name": "Group",
+                "dpi": "1080p",
+                "source": "Web",
+                "subtitle": "CHT",
+                "eps_collect": False,
+                "offset": 0,
+                "filter": "720",
+                "rss_link": "https://test.com/rss",
+                "poster_link": None,
+                "added": True,
+                "rule_name": None,
+                "save_path": None,
+                "deleted": False,
+            }
+            response = authed_client.patch(
+                "/api/v1/bangumi/update/1",
+                json=update_data,
+            )
+
+        assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# DELETE endpoints
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteBangumi:
+    def test_delete_success(self, authed_client):
+        """DELETE /bangumi/delete/{id} removes bangumi."""
+        resp_model = ResponseModel(
+            status=True, status_code=200, msg_en="Deleted.", msg_zh="已删除。"
+        )
+        with patch("module.api.bangumi.TorrentManager") as MockManager:
+            mock_mgr = MockManager.return_value
+            mock_mgr.delete_rule = AsyncMock(return_value=resp_model)
+
+            response = authed_client.delete("/api/v1/bangumi/delete/1")
+
+        assert response.status_code == 200
+
+    def test_disable_rule(self, authed_client):
+        """POST /bangumi/disable/{id} marks as deleted."""
+        resp_model = ResponseModel(
+            status=True, status_code=200, msg_en="Disabled.", msg_zh="已禁用。"
+        )
+        with patch("module.api.bangumi.TorrentManager") as MockManager:
+            mock_mgr = MockManager.return_value
+            mock_mgr.disable_rule = AsyncMock(return_value=resp_model)
+
+            response = authed_client.post("/api/v1/bangumi/disable/1")
+
+        assert response.status_code == 200
+
+    def test_enable_rule(self, authed_client):
+        """POST /bangumi/enable/{id} re-enables rule."""
+        resp_model = ResponseModel(
+            status=True, status_code=200, msg_en="Enabled.", msg_zh="已启用。"
+        )
+        with patch("module.api.bangumi.TorrentManager") as MockManager:
+            mock_mgr = MockManager.return_value
+            mock_mgr.enable_rule = AsyncMock(return_value=resp_model)
+
+            response = authed_client.post("/api/v1/bangumi/enable/1")
+
+        assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Reset
+# ---------------------------------------------------------------------------
+
+
+class TestResetBangumi:
+    def test_reset_all(self, authed_client, mock_db):
+        """POST /bangumi/reset/all deletes all bangumi."""
+        mock_db.bangumi.delete_all = AsyncMock(return_value=None)
+
+        response = authed_client.post("/api/v1/bangumi/reset/all")
+
+        assert response.status_code == 200

@@ -1,0 +1,335 @@
+"""
+Passkey 管理 API
+用于注册、列表、删除 Passkey 凭证
+"""
+
+import logging
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse, Response
+from sqlmodel import select
+
+from module.application.auth import AuthenticationError, AuthenticationService
+from module.conf import settings
+from module.database.engine import async_session_factory
+from module.database.passkey import PasskeyDatabase
+from module.models import APIResponse
+from module.models.passkey import (
+    PasskeyAuthFinish,
+    PasskeyAuthStart,
+    PasskeyCreate,
+    PasskeyDelete,
+    PasskeyList,
+)
+from module.models.user import AuthenticationSuccess, User
+from module.security.api import (
+    AuthPrincipal,
+    check_login_ip,
+    get_auth_service,
+    require_session_principal,
+)
+from module.security.auth_strategy import PasskeyAuthStrategy
+from module.security.webauthn import get_webauthn_service
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/passkey", tags=["passkey"])
+AuthService = Annotated[AuthenticationService, Depends(get_auth_service)]
+SessionPrincipal = Annotated[AuthPrincipal, Depends(require_session_principal)]
+
+_GENERIC_ERROR = "Internal server error."
+
+
+def _require_user_id(user: User) -> int:
+    if user.id is None:
+        raise RuntimeError("Persisted user has no primary key")
+    return user.id
+
+
+def _get_webauthn_from_request(request: Request):
+    """
+    从请求中构造 WebAuthnService
+
+    若配置了 settings.security.webauthn_rp_id / webauthn_origin（非空），
+    直接使用它们；否则回退到从请求头推断（Origin -> Referer -> Host），
+    这些请求头在反向代理场景下可能被客户端伪造，因此建议生产环境显式配置。
+    """
+    from urllib.parse import urlparse
+
+    origin = settings.security.webauthn_origin
+    if not origin:
+        origin = request.headers.get("origin", "")
+        if not origin:
+            # Fallback: 从 Referer 或 Host 推断
+            referer = request.headers.get("referer", "")
+            if referer:
+                parsed = urlparse(referer)
+                origin = f"{parsed.scheme}://{parsed.netloc}"
+            else:
+                host = request.headers.get("host", "localhost:7892")
+                forwarded_proto = request.headers.get("x-forwarded-proto")
+                scheme = forwarded_proto if forwarded_proto else request.url.scheme
+                origin = f"{scheme}://{host}"
+
+    rp_id = settings.security.webauthn_rp_id
+    if not rp_id:
+        rp_id = urlparse(origin).hostname or "localhost"
+
+    return get_webauthn_service(rp_id, "AutoBangumi", origin)
+
+
+# ============ 注册流程 ============
+
+
+@router.post("/register/options", response_model=dict)
+async def get_registration_options(
+    request: Request,
+    principal: SessionPrincipal,
+):
+    """
+    生成 Passkey 注册选项
+    前端调用 navigator.credentials.create() 时使用
+    """
+    webauthn = _get_webauthn_from_request(request)
+    user = principal.user
+    if user is None:
+        raise HTTPException(status_code=403, detail="A browser session is required")
+    username = principal.username
+    user_id = _require_user_id(user)
+
+    async with async_session_factory() as session:
+        try:
+            # Get existing passkeys
+            passkey_db = PasskeyDatabase(session)
+            existing_passkeys = await passkey_db.get_passkeys_by_user_id(user_id)
+
+            options = webauthn.generate_registration_options(
+                username=username,
+                user_id=user_id,
+                existing_passkeys=existing_passkeys,
+            )
+
+            return options
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to generate registration options: {e}")
+            raise HTTPException(status_code=500, detail=_GENERIC_ERROR)
+
+
+@router.post("/register/verify", response_model=APIResponse)
+async def verify_registration(
+    passkey_data: PasskeyCreate,
+    request: Request,
+    principal: SessionPrincipal,
+):
+    """
+    验证 Passkey 注册响应并保存
+    """
+    webauthn = _get_webauthn_from_request(request)
+    user = principal.user
+    if user is None:
+        raise HTTPException(status_code=403, detail="A browser session is required")
+    username = principal.username
+    user_id = _require_user_id(user)
+
+    async with async_session_factory() as session:
+        try:
+            # 验证 WebAuthn 响应
+            passkey = webauthn.verify_registration(
+                username=username,
+                credential=passkey_data.attestation_response,
+                device_name=passkey_data.name,
+            )
+
+            # 设置 user_id 并保存
+            passkey.user_id = user_id
+            passkey_db = PasskeyDatabase(session)
+            await passkey_db.create_passkey(passkey)
+
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "msg_en": f"Passkey '{passkey_data.name}' registered successfully",
+                    "msg_zh": f"Passkey '{passkey_data.name}' 注册成功",
+                },
+            )
+
+        except ValueError as e:
+            logger.warning(f"Registration verification failed for {username}: {e}")
+            raise HTTPException(status_code=400, detail=str(e))
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to register passkey: {e}")
+            raise HTTPException(status_code=500, detail=_GENERIC_ERROR)
+
+
+# ============ 认证流程 ============
+
+
+@router.post(
+    "/auth/options",
+    response_model=dict,
+    dependencies=[Depends(check_login_ip)],
+)
+async def get_passkey_login_options(
+    auth_data: PasskeyAuthStart,
+    request: Request,
+):
+    """
+    生成 Passkey 登录选项（challenge）
+    前端先调用此接口，再调用 navigator.credentials.get()
+
+    如果提供 username，返回该用户的 passkey 列表（allowCredentials）
+    如果不提供 username，返回可发现凭证选项（浏览器显示所有可用 passkey）
+    """
+    webauthn = _get_webauthn_from_request(request)
+
+    # Discoverable credentials mode (no username)
+    if not auth_data.username:
+        try:
+            options = webauthn.generate_discoverable_authentication_options()
+            return options
+        except Exception as e:
+            logger.error(f"Failed to generate discoverable login options: {e}")
+            raise HTTPException(status_code=500, detail=_GENERIC_ERROR)
+
+    # Username-based mode
+    async with async_session_factory() as session:
+        try:
+            # Get user
+            result = await session.execute(
+                select(User).where(User.username == auth_data.username)
+            )
+            user = result.scalar_one_or_none()
+
+            passkeys = []
+            if user:
+                user_id = _require_user_id(user)
+                passkey_db = PasskeyDatabase(session)
+                passkeys = await passkey_db.get_passkeys_by_user_id(user_id)
+
+            if not user or not passkeys:
+                # Same response whether the username doesn't exist or simply
+                # has no passkeys registered, so this endpoint can't be used
+                # to enumerate valid usernames.
+                raise HTTPException(
+                    status_code=400,
+                    detail="No passkeys available for this username.",
+                )
+
+            options = webauthn.generate_authentication_options(
+                auth_data.username, passkeys
+            )
+            return options
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to generate login options: {e}")
+            raise HTTPException(status_code=500, detail=_GENERIC_ERROR)
+
+
+@router.post(
+    "/auth/verify",
+    response_model=AuthenticationSuccess,
+    dependencies=[Depends(check_login_ip)],
+)
+async def login_with_passkey(
+    auth_data: PasskeyAuthFinish,
+    response: Response,
+    request: Request,
+    service: AuthService,
+):
+    """
+    使用 Passkey 登录（替代密码登录）
+
+    如果提供 username，验证 passkey 属于该用户
+    如果不提供 username（可发现凭证模式），从 credential 中提取用户信息
+    """
+    webauthn = _get_webauthn_from_request(request)
+
+    strategy = PasskeyAuthStrategy(webauthn)
+    resp = await strategy.authenticate(auth_data.username, auth_data.credential)
+
+    if resp.status:
+        user_id = resp.data.get("user_id") if resp.data else None
+        credential_id = resp.data.get("credential_id") if resp.data else None
+        if type(user_id) is not int or not isinstance(credential_id, str):
+            raise HTTPException(
+                status_code=500, detail="Failed to determine passkey identity"
+            )
+        try:
+            token = await service.issue_session_for_verified_passkey(
+                user_id, credential_id
+            )
+        except AuthenticationError as exc:
+            raise HTTPException(
+                status_code=401, detail="User is not available"
+            ) from exc
+        response.set_cookie(
+            key="token",
+            value=token,
+            httponly=True,
+            max_age=86400,
+            samesite="strict",
+        )
+        return AuthenticationSuccess()
+
+    raise HTTPException(status_code=resp.status_code, detail=resp.msg_en)
+
+
+# ============ Passkey 管理 ============
+
+
+@router.get("/list", response_model=list[PasskeyList])
+async def list_passkeys(principal: SessionPrincipal):
+    """获取用户的所有 Passkey"""
+    user = principal.user
+    if user is None:
+        raise HTTPException(status_code=403, detail="A browser session is required")
+    async with async_session_factory() as session:
+        try:
+            passkey_db = PasskeyDatabase(session)
+            passkeys = await passkey_db.get_passkeys_by_user_id(_require_user_id(user))
+
+            return [passkey_db.to_list_model(pk) for pk in passkeys]
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to list passkeys: {e}")
+            raise HTTPException(status_code=500, detail=_GENERIC_ERROR)
+
+
+@router.post("/delete", response_model=APIResponse)
+async def delete_passkey(
+    delete_data: PasskeyDelete,
+    principal: SessionPrincipal,
+):
+    """删除 Passkey"""
+    user = principal.user
+    if user is None:
+        raise HTTPException(status_code=403, detail="A browser session is required")
+    async with async_session_factory() as session:
+        try:
+            passkey_db = PasskeyDatabase(session)
+            await passkey_db.delete_passkey(
+                delete_data.passkey_id, _require_user_id(user)
+            )
+
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "msg_en": "Passkey deleted successfully",
+                    "msg_zh": "Passkey 删除成功",
+                },
+            )
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to delete passkey: {e}")
+            raise HTTPException(status_code=500, detail=_GENERIC_ERROR)

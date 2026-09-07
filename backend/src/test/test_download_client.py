@@ -1,0 +1,446 @@
+"""Tests for DownloadClient: auth, add_torrent, rename, etc."""
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from module.downloader.base import RenameOutcome, RenameResult
+from module.downloader.download_client import (
+    TORRENT_FETCH_PER_HOST_DELAY,
+    AddResult,
+    DownloadClient,
+)
+from module.models import Bangumi, Torrent
+from module.models.config import Config
+from test.factories import make_bangumi, make_torrent
+
+
+@pytest.fixture
+def download_client(mock_qb_client):
+    """Create a DownloadClient with mocked internal client."""
+    with patch("module.downloader.download_client.settings") as mock_settings:
+        mock_settings.downloader.type = "qbittorrent"
+        mock_settings.downloader.host = "localhost:8080"
+        mock_settings.downloader.username = "admin"
+        mock_settings.downloader.password = "admin"
+        mock_settings.downloader.ssl = False
+        mock_settings.downloader.path = "/downloads/Bangumi"
+        mock_settings.bangumi_manage.group_tag = False
+        with patch(
+            "module.downloader.download_client.DownloadClient._DownloadClient__getClient",
+            return_value=mock_qb_client,
+        ):
+            client = DownloadClient()
+    client.client = mock_qb_client
+    return client
+
+
+# ---------------------------------------------------------------------------
+# auth
+# ---------------------------------------------------------------------------
+
+
+class TestAuth:
+    async def test_auth_success(self, download_client, mock_qb_client):
+        """auth() sets authed=True when client authenticates."""
+        mock_qb_client.auth.return_value = True
+        await download_client.auth()
+        assert download_client.authed is True
+
+    async def test_auth_failure(self, download_client, mock_qb_client):
+        """auth() keeps authed=False when client fails."""
+        mock_qb_client.auth.return_value = False
+        await download_client.auth()
+        assert download_client.authed is False
+
+    async def test_aenter_closes_client_on_failed_auth(
+        self, download_client, mock_qb_client
+    ):
+        """__aenter__ must close the concrete client's pool before raising,
+        because __aexit__ never runs on a failed connect (leak fix, #1043)."""
+        mock_qb_client.auth.return_value = False
+
+        with pytest.raises(ConnectionError):
+            async with download_client:
+                pass
+
+        mock_qb_client.logout.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# add_torrent
+# ---------------------------------------------------------------------------
+
+
+class TestAddTorrent:
+    async def test_magnet_url(self, download_client, mock_qb_client):
+        """Magnet URLs are passed as torrent_urls, no file download."""
+        torrent = make_torrent(url="magnet:?xt=urn:btih:abc123")
+        bangumi = make_bangumi()
+
+        with patch("module.downloader.download_client.RequestContent") as MockReq:
+            mock_req = AsyncMock()
+            MockReq.return_value.__aenter__ = AsyncMock(return_value=mock_req)
+            MockReq.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await download_client.add_torrent(torrent, bangumi)
+
+        assert result is AddResult.ADDED
+        call_kwargs = mock_qb_client.add_torrents.call_args[1]
+        assert call_kwargs["torrent_urls"] == "magnet:?xt=urn:btih:abc123"
+        assert call_kwargs["torrent_files"] is None
+
+    async def test_file_url_downloads_content(self, download_client, mock_qb_client):
+        """Non-magnet URLs trigger file download and pass as torrent_files."""
+        torrent = make_torrent(url="https://example.com/file.torrent")
+        bangumi = make_bangumi()
+
+        with patch("module.downloader.download_client.RequestContent") as MockReq:
+            mock_req = AsyncMock()
+            mock_req.get_content = AsyncMock(return_value=b"torrent-file-data")
+            MockReq.return_value.__aenter__ = AsyncMock(return_value=mock_req)
+            MockReq.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await download_client.add_torrent(torrent, bangumi)
+
+        assert result is AddResult.ADDED
+        call_kwargs = mock_qb_client.add_torrents.call_args[1]
+        assert call_kwargs["torrent_files"] == b"torrent-file-data"
+        assert call_kwargs["torrent_urls"] is None
+
+    async def test_add_torrent_same_host_batch_delays_between_fetches(
+        self, download_client, mock_qb_client
+    ):
+        """同一主机的批量种子下载应串行并在请求间加延时（#1052）。"""
+        torrents = [
+            make_torrent(url=f"https://nyaa.si/download/{i}.torrent")
+            for i in range(1, 4)
+        ]
+        bangumi = make_bangumi()
+
+        with (
+            patch("module.downloader.download_client.RequestContent") as MockReq,
+            patch(
+                "module.downloader.download_client.asyncio.sleep",
+                new_callable=AsyncMock,
+            ) as mock_sleep,
+        ):
+            mock_req = AsyncMock()
+            mock_req.get_content = AsyncMock(return_value=b"data")
+            MockReq.return_value.__aenter__ = AsyncMock(return_value=mock_req)
+            MockReq.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await download_client.add_torrent(torrents, bangumi)
+
+        assert result is AddResult.ADDED
+        assert mock_req.get_content.await_count == 3
+        assert mock_sleep.await_count == 2
+        for call in mock_sleep.await_args_list:
+            assert call.args == (TORRENT_FETCH_PER_HOST_DELAY,)
+        call_kwargs = mock_qb_client.add_torrents.call_args[1]
+        assert len(call_kwargs["torrent_files"]) == 3
+
+    async def test_add_torrent_different_hosts_no_delay(
+        self, download_client, mock_qb_client
+    ):
+        """不同主机之间并行下载，无需延时。"""
+        torrents = [
+            make_torrent(url="https://nyaa.si/download/1.torrent"),
+            make_torrent(url="https://mikanani.me/Download/2.torrent"),
+        ]
+        bangumi = make_bangumi()
+
+        with (
+            patch("module.downloader.download_client.RequestContent") as MockReq,
+            patch(
+                "module.downloader.download_client.asyncio.sleep",
+                new_callable=AsyncMock,
+            ) as mock_sleep,
+        ):
+            mock_req = AsyncMock()
+            mock_req.get_content = AsyncMock(return_value=b"data")
+            MockReq.return_value.__aenter__ = AsyncMock(return_value=mock_req)
+            MockReq.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await download_client.add_torrent(torrents, bangumi)
+
+        assert result is AddResult.ADDED
+        assert mock_req.get_content.await_count == 2
+        mock_sleep.assert_not_awaited()
+
+    async def test_add_torrent_batch_partial_fetch_failure_keeps_successes(
+        self, download_client, mock_qb_client
+    ):
+        """批量下载中个别失败（None）应被过滤，其余照常提交。"""
+        torrents = [
+            make_torrent(url=f"https://nyaa.si/download/{i}.torrent")
+            for i in range(1, 4)
+        ]
+        bangumi = make_bangumi()
+
+        with (
+            patch("module.downloader.download_client.RequestContent") as MockReq,
+            patch(
+                "module.downloader.download_client.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
+        ):
+            mock_req = AsyncMock()
+            mock_req.get_content = AsyncMock(side_effect=[b"a", None, b"c"])
+            MockReq.return_value.__aenter__ = AsyncMock(return_value=mock_req)
+            MockReq.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await download_client.add_torrent(torrents, bangumi)
+
+        assert result is AddResult.ADDED
+        call_kwargs = mock_qb_client.add_torrents.call_args[1]
+        assert call_kwargs["torrent_files"] == [b"a", b"c"]
+
+    async def test_list_magnet_urls(self, download_client, mock_qb_client):
+        """List of magnet torrents are joined as list of URLs."""
+        torrents = [
+            make_torrent(url="magnet:?xt=urn:btih:aaa"),
+            make_torrent(url="magnet:?xt=urn:btih:bbb"),
+            make_torrent(url="magnet:?xt=urn:btih:ccc"),
+        ]
+        bangumi = make_bangumi()
+
+        with patch("module.downloader.download_client.RequestContent") as MockReq:
+            mock_req = AsyncMock()
+            MockReq.return_value.__aenter__ = AsyncMock(return_value=mock_req)
+            MockReq.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await download_client.add_torrent(torrents, bangumi)
+
+        assert result is AddResult.ADDED
+        call_kwargs = mock_qb_client.add_torrents.call_args[1]
+        assert len(call_kwargs["torrent_urls"]) == 3
+
+    async def test_add_torrent_empty_list_returns_failed(
+        self, download_client, mock_qb_client
+    ):
+        """Empty torrent list returns FAILED without calling client."""
+        bangumi = make_bangumi()
+        with patch("module.downloader.download_client.RequestContent") as MockReq:
+            mock_req = AsyncMock()
+            MockReq.return_value.__aenter__ = AsyncMock(return_value=mock_req)
+            MockReq.return_value.__aexit__ = AsyncMock(return_value=False)
+            result = await download_client.add_torrent([], bangumi)
+
+        assert result is AddResult.FAILED
+        mock_qb_client.add_torrents.assert_not_called()
+
+    async def test_add_torrent_client_reports_existing_returns_duplicate(
+        self, download_client, mock_qb_client
+    ):
+        """When client.add_torrents returns False (already added), returns
+        DUPLICATE, not a failure."""
+        mock_qb_client.add_torrents.return_value = AddResult.DUPLICATE
+        torrent = make_torrent(url="magnet:?xt=urn:btih:abc")
+        bangumi = make_bangumi()
+
+        with patch("module.downloader.download_client.RequestContent") as MockReq:
+            mock_req = AsyncMock()
+            MockReq.return_value.__aenter__ = AsyncMock(return_value=mock_req)
+            MockReq.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await download_client.add_torrent(torrent, bangumi)
+
+        assert result is AddResult.DUPLICATE
+
+    async def test_add_torrent_client_reports_failed_returns_failed(
+        self, download_client, mock_qb_client
+    ):
+        """When client.add_torrents returns FAILED, facade returns FAILED."""
+        mock_qb_client.add_torrents.return_value = AddResult.FAILED
+        torrent = make_torrent(url="magnet:?xt=urn:btih:abc")
+        bangumi = make_bangumi()
+
+        with patch("module.downloader.download_client.RequestContent") as MockReq:
+            mock_req = AsyncMock()
+            MockReq.return_value.__aenter__ = AsyncMock(return_value=mock_req)
+            MockReq.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await download_client.add_torrent(torrent, bangumi)
+
+        assert result is AddResult.FAILED
+
+    async def test_add_torrent_fetch_failure_returns_failed(
+        self, download_client, mock_qb_client
+    ):
+        """When the .torrent file can't be fetched, returns FAILED."""
+        torrent = make_torrent(url="https://example.com/file.torrent")
+        bangumi = make_bangumi()
+
+        with patch("module.downloader.download_client.RequestContent") as MockReq:
+            mock_req = AsyncMock()
+            mock_req.get_content = AsyncMock(return_value=None)
+            MockReq.return_value.__aenter__ = AsyncMock(return_value=mock_req)
+            MockReq.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await download_client.add_torrent(torrent, bangumi)
+
+        assert result is AddResult.FAILED
+        mock_qb_client.add_torrents.assert_not_called()
+
+    async def test_add_torrent_client_exception_returns_failed(
+        self, download_client, mock_qb_client
+    ):
+        """When client.add_torrents raises, returns FAILED."""
+        mock_qb_client.add_torrents.side_effect = RuntimeError("connection lost")
+        torrent = make_torrent(url="magnet:?xt=urn:btih:abc")
+        bangumi = make_bangumi()
+
+        with patch("module.downloader.download_client.RequestContent") as MockReq:
+            mock_req = AsyncMock()
+            MockReq.return_value.__aenter__ = AsyncMock(return_value=mock_req)
+            MockReq.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await download_client.add_torrent(torrent, bangumi)
+
+        assert result is AddResult.FAILED
+
+    async def test_generates_save_path_if_missing(
+        self, download_client, mock_qb_client
+    ):
+        """When bangumi.save_path is empty, generates one."""
+        torrent = make_torrent(url="magnet:?xt=urn:btih:abc")
+        bangumi = make_bangumi(save_path=None)
+
+        with patch("module.downloader.download_client.RequestContent") as MockReq:
+            mock_req = AsyncMock()
+            MockReq.return_value.__aenter__ = AsyncMock(return_value=mock_req)
+            MockReq.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with patch("module.downloader.path.settings") as mock_settings:
+                mock_settings.downloader.path = "/downloads/Bangumi"
+                await download_client.add_torrent(torrent, bangumi)
+
+        assert bangumi.save_path is not None
+
+
+# ---------------------------------------------------------------------------
+# get_torrent_info / rename_torrent_file / delete_torrent
+# ---------------------------------------------------------------------------
+
+
+class TestClientDelegation:
+    async def test_get_torrent_info(self, download_client, mock_qb_client):
+        """get_torrent_info delegates to client.torrents_info."""
+        mock_qb_client.torrents_info.return_value = [
+            {"hash": "abc", "name": "test", "save_path": "/test"}
+        ]
+        result = await download_client.get_torrent_info()
+        mock_qb_client.torrents_info.assert_called_once_with(
+            status_filter="completed", category="Bangumi", tag=None
+        )
+        assert len(result) == 1
+
+    async def test_torrent_exists_preserves_unknown_state(
+        self, download_client, mock_qb_client
+    ):
+        mock_qb_client.torrent_exists.return_value = None
+
+        result = await download_client.torrent_exists("hash1")
+
+        assert result is None
+        mock_qb_client.torrent_exists.assert_awaited_once_with("hash1")
+
+    async def test_rename_torrent_file_success(self, download_client, mock_qb_client):
+        """rename_torrent_file preserves the concrete structured result."""
+        expected = RenameResult(RenameOutcome.RENAMED)
+        mock_qb_client.torrents_rename_file.return_value = expected
+        result = await download_client.rename_torrent_file(
+            "hash1", "old.mkv", "new.mkv"
+        )
+        assert result is expected
+
+    async def test_rename_torrent_file_failure(self, download_client, mock_qb_client):
+        """Failure reasons are not collapsed back into a boolean."""
+        expected = RenameResult(
+            RenameOutcome.RETRYABLE_FAILURE, detail="verification timed out"
+        )
+        mock_qb_client.torrents_rename_file.return_value = expected
+        result = await download_client.rename_torrent_file(
+            "hash1", "old.mkv", "new.mkv"
+        )
+        assert result is expected
+        assert result.outcome is RenameOutcome.RETRYABLE_FAILURE
+
+    async def test_rename_torrent_file_passes_verify_flag(
+        self, download_client, mock_qb_client
+    ):
+        """rename_torrent_file forwards the verify kwarg to the underlying client."""
+        mock_qb_client.torrents_rename_file.return_value = RenameResult(
+            RenameOutcome.RENAMED
+        )
+        await download_client.rename_torrent_file(
+            "hash1", "old.mkv", "new.mkv", verify=False
+        )
+        call_kwargs = mock_qb_client.torrents_rename_file.call_args[1]
+        assert call_kwargs["verify"] is False
+
+    async def test_delete_torrent(self, download_client, mock_qb_client):
+        """delete_torrent delegates to client.torrents_delete."""
+        await download_client.delete_torrent("hash1", delete_files=True)
+        mock_qb_client.torrents_delete.assert_called_once_with(
+            "hash1", delete_files=True
+        )
+
+
+# ---------------------------------------------------------------------------
+# add_tag
+# ---------------------------------------------------------------------------
+
+
+class TestAddTag:
+    async def test_add_tag_delegates_to_client(self, download_client, mock_qb_client):
+        """add_tag delegates to client.add_tag."""
+        mock_qb_client.add_tag = AsyncMock(return_value=None)
+        download_client.client = mock_qb_client
+        await download_client.add_tag("deadbeef12345678", "ab:42")
+        mock_qb_client.add_tag.assert_called_once_with("deadbeef12345678", "ab:42")
+
+    async def test_add_tag_short_hash_no_error(self, download_client, mock_qb_client):
+        """add_tag with a hash shorter than 8 chars does not crash the slice."""
+        mock_qb_client.add_tag = AsyncMock(return_value=None)
+        download_client.client = mock_qb_client
+        # Should not raise even for short hashes
+        await download_client.add_tag("abc", "ab:1")
+
+
+# ---------------------------------------------------------------------------
+# Context manager: ConnectionError on failed auth
+# ---------------------------------------------------------------------------
+
+
+class TestContextManagerAuth:
+    async def test_aenter_raises_on_auth_failure(self, download_client, mock_qb_client):
+        """__aenter__ raises ConnectionError when auth fails."""
+        mock_qb_client.auth.return_value = False
+        download_client.authed = False
+        with pytest.raises(ConnectionError, match="authentication failed"):
+            await download_client.__aenter__()
+
+    async def test_aenter_succeeds_when_auth_passes(
+        self, download_client, mock_qb_client
+    ):
+        """__aenter__ returns self when auth succeeds."""
+        mock_qb_client.auth.return_value = True
+        download_client.authed = False
+        result = await download_client.__aenter__()
+        assert result is download_client
+        assert download_client.authed is True
+
+    async def test_aexit_reuses_session_without_logout(
+        self, download_client, mock_qb_client
+    ):
+        """__aexit__ resets authed but keeps the session (no logout).
+
+        The concrete client is reused across operations (#1039 / #900);
+        teardown is deferred to shutdown().
+        """
+        download_client.authed = True
+        await download_client.__aexit__(None, None, None)
+        mock_qb_client.logout.assert_not_called()
+        assert download_client.authed is False

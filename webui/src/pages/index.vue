@@ -1,0 +1,167 @@
+<script lang="ts" setup>
+import type { BangumiRule } from '#/bangumi';
+
+definePage({
+  name: 'Index',
+  redirect: '/bangumi',
+});
+
+const { editRule } = storeToRefs(useBangumiStore());
+const { updateRule, enableRule, archiveRule, unarchiveRule, ruleManage } =
+  useBangumiStore();
+
+function onEnableRule(id: number) {
+  enableRule(id);
+}
+
+function onArchiveRule(id: number) {
+  archiveRule(id);
+}
+
+function onUnarchiveRule(id: number) {
+  unarchiveRule(id);
+}
+
+function onDeleteFile(
+  type: 'disable' | 'delete',
+  { id, deleteFile }: { id: number; deleteFile: boolean }
+) {
+  ruleManage(type, id, deleteFile);
+}
+
+function onApplyRule(rule: BangumiRule) {
+  updateRule(rule.id, rule);
+}
+
+// ---------- 视口等比缩放 ----------
+// 桌面布局有设计保底尺寸（1024×768）；视口高度不足时整体等比缩小，
+// 避免布局容器溢出产生页面级滚动条。移动布局无保底，不参与缩放。
+const DESIGN_MIN_HEIGHT = 768;
+const layoutEl = ref<HTMLElement | null>(null);
+
+function applyViewportScale() {
+  const el = layoutEl.value;
+  if (!el) return;
+  const scale =
+    window.innerWidth < 1024 ? 1 : Math.min(1, window.innerHeight / DESIGN_MIN_HEIGHT);
+  // zoom 属于非标准属性（主流浏览器均已支持），TS 类型里没有声明
+  (el.style as CSSStyleDeclaration & { zoom?: string }).zoom =
+    scale < 1 ? String(scale) : '';
+}
+
+onMounted(() => {
+  applyViewportScale();
+  window.addEventListener('resize', applyViewportScale);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', applyViewportScale);
+});
+</script>
+
+<template>
+  <div ref="layoutEl" class="layout-container">
+    <a href="#main-content" class="skip-link">Skip to content</a>
+
+    <ab-topbar />
+
+    <main class="layout-main">
+      <ab-sidebar />
+
+      <div id="main-content" class="layout-content">
+        <ab-page-title :title="$route.name"></ab-page-title>
+
+        <RouterView v-slot="{ Component }">
+          <transition name="page" mode="out-in">
+            <!-- max bounds background re-renders: SSE-fed pages (log,
+                 downloader) keep updating while cached -->
+            <KeepAlive :max="3">
+              <component :is="Component" />
+            </KeepAlive>
+          </transition>
+        </RouterView>
+      </div>
+    </main>
+
+    <ab-edit-rule
+      v-model:show="editRule.show"
+      v-model:rule="editRule.item"
+      @enable="onEnableRule"
+      @archive="onArchiveRule"
+      @unarchive="onUnarchiveRule"
+      @delete-file="onDeleteFile"
+      @apply="onApplyRule"
+    />
+  </div>
+</template>
+
+<style lang="scss" scoped>
+.layout-container {
+  width: 100%;
+  height: 100dvh;
+  overflow: hidden;
+
+  padding: var(--layout-padding);
+  padding-left: calc(var(--layout-padding) + env(safe-area-inset-left, 0px));
+  padding-right: calc(var(--layout-padding) + env(safe-area-inset-right, 0px));
+  gap: var(--layout-gap);
+
+  display: flex;
+  flex-direction: column;
+
+  background: var(--color-bg);
+  transition: background-color var(--transition-normal);
+
+  @include forDesktop {
+    min-width: 1024px;
+    min-height: 768px;
+  }
+}
+
+.layout-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-gap);
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+  // Clear the fixed bottom nav (only rendered <640px)
+  padding-bottom: calc(var(--nav-height) + var(--layout-gap));
+
+  @include forTablet {
+    flex-direction: row;
+    padding-bottom: 0;
+  }
+
+  @include forDesktop {
+    flex-direction: row;
+  }
+}
+
+.layout-content {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: var(--layout-gap);
+}
+
+.skip-link {
+  position: absolute;
+  top: -100%;
+  left: 16px;
+  z-index: 100;
+  padding: 8px 16px;
+  background: var(--color-primary);
+  color: #fff;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  text-decoration: none;
+  transition: top var(--transition-fast);
+
+  &:focus {
+    top: 16px;
+  }
+}
+</style>

@@ -1,0 +1,69 @@
+import { createI18n } from 'vue-i18n';
+import { createSharedComposable, useLocalStorage } from '@vueuse/core';
+import enUS from '@/i18n/en.json';
+import zhCN from '@/i18n/zh-CN.json';
+import type { ApiSuccess } from '#/api';
+
+const messages = {
+  en: enUS,
+  'zh-CN': zhCN,
+};
+
+type Languages = keyof typeof messages;
+
+function normalizeLocale(locale: string): Languages {
+  if (locale.startsWith('zh')) return 'zh-CN';
+  return 'en';
+}
+
+export const i18n = createI18n({
+  legacy: false,
+  locale: normalizeLocale(navigator.language),
+  fallbackLocale: 'en',
+  messages,
+});
+
+export const useMyI18n = createSharedComposable(() => {
+  const lang = useLocalStorage<Languages>(
+    'lang',
+    normalizeLocale(navigator.language)
+  );
+
+  i18n.global.locale.value = lang.value as unknown as Languages;
+
+  watch(lang, (val) => {
+    i18n.global.locale.value = val as unknown as Languages;
+  });
+
+  function changeLocale() {
+    if (lang.value === 'zh-CN') {
+      lang.value = 'en';
+    } else {
+      lang.value = 'zh-CN';
+    }
+  }
+
+  function returnUserLangText(texts: {
+    [k in Languages]: string;
+  }) {
+    return texts[lang.value] ?? texts.en;
+  }
+
+  function returnUserLangMsg(res: ApiSuccess) {
+    const msg = returnUserLangText({
+      en: res.msg_en,
+      'zh-CN': res.msg_zh,
+    });
+    return msg;
+  }
+
+  return {
+    lang,
+    i18n,
+    t: i18n.global.t,
+    locale: i18n.global.locale,
+    changeLocale,
+    returnUserLangText,
+    returnUserLangMsg,
+  };
+});

@@ -1,0 +1,423 @@
+<script lang="ts" setup>
+import { ErrorPicture, Write, ListView } from '@icon-park/vue-next';
+import type { BangumiRule } from '#/bangumi';
+
+const props = withDefaults(
+  defineProps<{
+    type?: 'primary' | 'search' | 'mobile';
+    bangumi: BangumiRule;
+  }>(),
+  {
+    type: 'primary',
+  }
+);
+
+const emit = defineEmits(['click', 'episodes']);
+
+const posterSrc = computed(() => resolvePosterUrl(props.bangumi.poster_link));
+</script>
+
+<template>
+  <!-- Grid poster card -->
+  <div
+    v-if="type === 'primary'"
+    class="card"
+    role="button"
+    tabindex="0"
+    :aria-label="`Edit ${bangumi.official_title}`"
+    @click="() => $emit('click')"
+    @keydown.enter="() => $emit('click')"
+    @keydown.space.prevent="() => $emit('click')"
+  >
+    <div
+      class="card-poster"
+      :class="{ 'card-poster--needs-review': bangumi.needs_review }"
+    >
+      <template v-if="bangumi.poster_link">
+        <img
+          :src="posterSrc"
+          :alt="bangumi.official_title"
+          class="card-img"
+          loading="lazy"
+        />
+      </template>
+      <template v-else>
+        <div class="card-placeholder">
+          <ErrorPicture theme="outline" size="24" />
+        </div>
+      </template>
+
+      <div class="card-overlay">
+        <div class="card-overlay-tags">
+          <ab-tag :title="`Season ${bangumi.season}`" type="info" />
+          <ab-tag
+            v-if="bangumi.group_name"
+            :title="bangumi.group_name"
+            type="info"
+          />
+        </div>
+        <!-- 悬停操作：编辑规则 / 剧集总览 -->
+        <div class="card-hover-actions">
+          <button
+            type="button"
+            class="hover-action-btn"
+            :aria-label="$t('homepage.rule.edit_rule')"
+            :title="$t('homepage.rule.edit_rule')"
+            @click.stop="emit('click')"
+          >
+            <Write size="18" />
+          </button>
+          <button
+            type="button"
+            class="hover-action-btn hover-action-btn--episodes"
+            :aria-label="$t('rss.episodes')"
+            :title="$t('rss.episodes')"
+            @click.stop="emit('episodes')"
+          >
+            <ListView size="18" />
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card-info">
+      <div class="card-title" :title="bangumi.official_title">
+        {{ bangumi.official_title }}
+      </div>
+    </div>
+  </div>
+
+  <!-- Search result card -->
+  <div v-else-if="type === 'search'" class="search-card">
+    <div class="search-card-inner">
+      <div class="search-card-content">
+        <div class="search-card-thumb">
+          <template v-if="bangumi.poster_link">
+            <img
+              :src="posterSrc"
+              :alt="bangumi.official_title"
+              class="search-card-img"
+            />
+          </template>
+          <template v-else>
+            <div class="card-placeholder card-placeholder--small">
+              <ErrorPicture theme="outline" size="20" />
+            </div>
+          </template>
+        </div>
+        <div class="search-card-meta">
+          <div class="search-card-title">{{ bangumi.official_title }}</div>
+          <div class="card-tags">
+            <ab-tag
+              v-if="bangumi.season"
+              :title="`Season ${bangumi.season}`"
+              type="info"
+            />
+            <ab-tag
+              v-if="bangumi.group_name"
+              :title="bangumi.group_name"
+              type="info"
+            />
+            <ab-tag
+              v-if="bangumi.subtitle"
+              :title="bangumi.subtitle"
+              type="info"
+            />
+          </div>
+        </div>
+      </div>
+      <ab-icon-button
+        variant="solid"
+        round
+        :label="$t('topbar.add.button')"
+        @click="() => $emit('click')"
+      >
+        <svg viewBox="0 0 24 24" fill="none" width="14" height="14">
+          <path
+            d="M12 5v14M5 12h14"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+          />
+        </svg>
+      </ab-icon-button>
+    </div>
+  </div>
+</template>
+
+<style lang="scss" scoped>
+// Grid poster card
+.card {
+  width: 150px;
+  cursor: pointer;
+  user-select: none;
+
+  // Focus ring for keyboard navigation
+  &:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 4px;
+    border-radius: var(--radius-md);
+  }
+}
+
+.card-poster {
+  position: relative;
+  aspect-ratio: 5 / 7;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: var(--shadow-md);
+  transition: box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+
+  .card:hover &,
+  .card:focus-visible & {
+    box-shadow: var(--shadow-lg);
+    transform: translateY(-2px);
+  }
+
+  // On touch devices, don't lift on hover
+  @include forTouch {
+    .card:hover & {
+      transform: none;
+    }
+  }
+}
+
+.card-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+// Card glow animation when needs review - yellow
+.card-poster--needs-review {
+  animation: card-glow 2.5s ease-in-out infinite;
+}
+
+@keyframes card-glow {
+  0%,
+  100% {
+    box-shadow: var(--shadow-md), 0 0 0 0 rgba(251, 191, 36, 0);
+  }
+  50% {
+    box-shadow: var(--shadow-md), 0 0 16px 4px rgba(251, 191, 36, 0.6);
+  }
+}
+
+.card-placeholder {
+  width: 100%;
+  height: 100%;
+  min-height: 210px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-hover);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+  transition: background-color var(--transition-normal);
+
+  &--small {
+    min-height: 44px;
+    height: 44px;
+  }
+}
+
+.card-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  background: var(--color-overlay-light);
+  backdrop-filter: blur(2px);
+  transition: opacity var(--transition-normal);
+
+  .card:hover &,
+  .card:focus-visible & {
+    opacity: 1;
+  }
+
+  .card:active & {
+    background: var(--color-overlay);
+  }
+
+  // On touch devices, always show a subtle indicator
+  @include forTouch {
+    opacity: 1;
+    background: linear-gradient(
+      to top,
+      var(--color-overlay) 0%,
+      transparent 50%
+    );
+    backdrop-filter: none;
+
+    .card-hover-actions {
+      position: absolute;
+      bottom: 8px;
+      right: 8px;
+      gap: 6px;
+    }
+
+    .hover-action-btn {
+      width: 32px;
+      height: 32px;
+    }
+  }
+}
+
+.card-overlay-tags {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  right: 6px;
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+
+  :deep(.ab-tag) {
+    background: var(--color-overlay);
+    border-color: rgba(255, 255, 255, 0.4);
+    color: var(--color-white);
+    font-size: 9px;
+    padding: 1px 6px;
+
+    // 海报叠层上的信息 chip 不需要语义色标记
+    &::before {
+      display: none;
+    }
+  }
+
+  // On touch, move tags to avoid overlap with edit button
+  @include forTouch {
+    right: 44px;
+  }
+}
+
+// 悬停操作按钮组：编辑规则 + 剧集总览
+.card-hover-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hover-action-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-primary);
+  color: var(--color-white);
+  box-shadow: var(--shadow-md);
+  cursor: pointer;
+  transition: transform var(--transition-fast),
+    background-color var(--transition-fast);
+
+  &:hover {
+    background: var(--color-primary-hover);
+    transform: scale(1.08);
+  }
+
+  &:active {
+    transform: scale(0.92);
+  }
+}
+
+.hover-action-btn--episodes {
+  background: var(--color-surface);
+  color: var(--color-primary);
+  border: 1px solid var(--color-primary);
+
+  &:hover {
+    background: var(--color-primary-light);
+  }
+}
+
+.card-info {
+  padding: 8px 2px 4px;
+}
+
+.card-title {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--color-text);
+  // 两行截断代替单行：动画标题普遍偏长，单行几乎总在截断
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  transition: color var(--transition-normal);
+}
+
+.card-tags {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+// Search result card
+.search-card {
+  width: 100%;
+  max-width: 480px;
+  border-radius: var(--radius-lg);
+  padding: 4px;
+  background: var(--color-primary-light);
+  box-shadow: var(--shadow-sm);
+  transition: background-color var(--transition-normal);
+}
+
+.search-card-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  transition: background-color var(--transition-normal);
+}
+
+.search-card-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.search-card-thumb {
+  width: 72px;
+  height: 44px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.search-card-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.search-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.search-card-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>

@@ -1,0 +1,278 @@
+import asyncio
+import logging
+import math
+from typing import Any
+
+import httpx
+from httpx_socks import AsyncProxyTransport
+
+from module.conf import settings
+
+logger = logging.getLogger(__name__)
+
+# Module-level shared client for connection reuse
+_shared_client: httpx.AsyncClient | None = None
+_shared_client_proxy_key: str | None = None
+
+# RSS 循环间隔 900s， 远超服务端 keep-alive 超时（60-120s）
+# keepalive_expiry=60 让空闲连接在过期前主动丢弃，避免复用过期连接
+# max_connections=20 足够覆盖典型订阅数量
+_CONNECTION_LIMITS = httpx.Limits(
+    max_keepalive_connections=5,
+    max_connections=20,
+    keepalive_expiry=60.0,
+)
+
+# HTTP 429 限流退避（#1052）：无 Retry-After（或非数字形式）时的默认等待，
+# 以及对服务端 Retry-After 的上限保护
+HTTP_429_FALLBACK_DELAY = 10.0
+HTTP_429_MAX_RETRY_AFTER = 60.0
+
+
+def _retry_after_delay(response: httpx.Response) -> float:
+    """从 429 响应解析等待秒数；仅接受数字形式的 Retry-After，日期形式走默认值。"""
+    retry_after = response.headers.get("Retry-After")
+    if retry_after is not None:
+        try:
+            value = float(retry_after)
+        except ValueError:
+            return HTTP_429_FALLBACK_DELAY
+        # float("nan") 能通过解析，且 min/max 会传播 NaN → asyncio.sleep(nan) 永不唤醒
+        if math.isnan(value):
+            return HTTP_429_FALLBACK_DELAY
+        return min(max(value, 0.0), HTTP_429_MAX_RETRY_AFTER)
+    return HTTP_429_FALLBACK_DELAY
+
+
+def _proxy_config_key() -> str:
+    if settings.proxy.enable:
+        return f"{settings.proxy.type}:{settings.proxy.host}:{settings.proxy.port}:{settings.proxy.username}"
+    return ""
+
+
+async def get_shared_client() -> httpx.AsyncClient:
+    global _shared_client, _shared_client_proxy_key
+    current_key = _proxy_config_key()
+    if _shared_client is not None and _shared_client_proxy_key == current_key:
+        return _shared_client
+    if _shared_client is not None:
+        await _shared_client.aclose()
+    timeout = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
+    # follow_redirects=True: Mikan mirrors and some CDNs respond with 302 to the
+    # canonical host; without this, raise_for_status treats the redirect as an
+    # error and the RSS pull fails (#983).
+    common_kwargs: dict[str, Any] = {
+        "timeout": timeout,
+        "limits": _CONNECTION_LIMITS,
+        "follow_redirects": True,
+    }
+    if settings.proxy.enable:
+        if "http" in settings.proxy.type:
+            if settings.proxy.username:
+                proxy_url = f"http://{settings.proxy.username}:{settings.proxy.password}@{settings.proxy.host}:{settings.proxy.port}"
+            else:
+                proxy_url = f"http://{settings.proxy.host}:{settings.proxy.port}"
+            _shared_client = httpx.AsyncClient(proxy=proxy_url, **common_kwargs)
+        elif settings.proxy.type == "socks5":
+            if settings.proxy.username:
+                socks_url = f"socks5://{settings.proxy.username}:{settings.proxy.password}@{settings.proxy.host}:{settings.proxy.port}"
+            else:
+                socks_url = f"socks5://{settings.proxy.host}:{settings.proxy.port}"
+            transport = AsyncProxyTransport.from_url(socks_url, rdns=True)
+            _shared_client = httpx.AsyncClient(transport=transport, **common_kwargs)
+        else:
+            _shared_client = httpx.AsyncClient(**common_kwargs)
+    else:
+        _shared_client = httpx.AsyncClient(**common_kwargs)
+    _shared_client_proxy_key = current_key
+    return _shared_client
+
+
+async def reset_shared_client():
+    """关闭并清除共享客户端，下次请求时自动创建新连接池。"""
+    global _shared_client, _shared_client_proxy_key
+    if _shared_client is not None:
+        await _shared_client.aclose()
+    _shared_client = None
+    _shared_client_proxy_key = None
+
+
+class RequestURL:
+    # More complete User-Agent to avoid Cloudflare blocking
+    DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+    def __init__(self):
+        self.header = {"User-Agent": self.DEFAULT_UA, "Accept": "application/xml"}
+        self._client: httpx.AsyncClient | None = None
+
+    def _get_headers(self, url: str) -> dict:
+        """Get appropriate headers based on URL type."""
+        base_headers = {
+            "User-Agent": self.DEFAULT_UA,
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate",
+            "Connection": "keep-alive",
+        }
+        # For torrent files, use different Accept header
+        if url.endswith(".torrent") or "/download/" in url:
+            base_headers["Accept"] = (
+                "application/x-bittorrent, application/octet-stream, */*"
+            )
+        else:
+            base_headers["Accept"] = "application/xml, text/xml, */*"
+        return base_headers
+
+    async def get_url(self, url, retry=3):
+        assert (
+            self._client is not None
+        ), "RequestURL must be used as an async context manager"
+        try_time = 0
+        headers = self._get_headers(url)
+        while True:
+            try:
+                req = await self._client.get(url=url, headers=headers)
+                logger.debug(
+                    "Successfully connected to %s. Status: %s",
+                    url,
+                    req.status_code,
+                )
+                req.raise_for_status()
+                return req
+            except httpx.HTTPStatusError as e:
+                logger.warning(f"HTTP {e.response.status_code} from {url}")
+                if e.response.status_code != 429:
+                    break
+                # 429 限流：按 Retry-After 退避后重试（#1052）
+                try_time += 1
+                if try_time >= retry:
+                    break
+                delay = _retry_after_delay(e.response)
+                logger.warning(
+                    f"Rate limited by {url}, retrying in {delay:.0f}s "
+                    f"({try_time}/{retry})"
+                )
+                await asyncio.sleep(delay)
+            except httpx.RequestError as e:
+                logger.warning(
+                    f"Request error for {url}: {type(e).__name__}. Retry {try_time + 1}/{retry}"
+                )
+                try_time += 1
+                if try_time >= retry:
+                    break
+                # Retry on the same shared client without closing it: other
+                # concurrent tasks may still have in-flight requests on this
+                # pool, and aclose()-ing it out from under them kills those
+                # requests too. The shared client is only replaced/closed on
+                # shutdown or settings reload (see AppContext).
+                await asyncio.sleep(5)
+            except Exception as e:
+                logger.warning(f"Unexpected error for {url}: {e}")
+                break
+        logger.error(f"Unable to connect to {url}, Please check your network settings")
+        return None
+
+    async def post_url(self, url: str, data: dict, retry=3):
+        assert (
+            self._client is not None
+        ), "RequestURL must be used as an async context manager"
+        try_time = 0
+        while True:
+            try:
+                req = await self._client.post(url=url, headers=self.header, data=data)
+                req.raise_for_status()
+                return req
+            except httpx.HTTPStatusError as e:
+                # 服务端拒绝不是连接失败，重试无意义；把状态码和响应体
+                # （如 Telegram 的 JSON description）记下来便于排查（#1094）。
+                logger.warning(
+                    "HTTP %s from %s: %s",
+                    e.response.status_code,
+                    url,
+                    e.response.text[:200],
+                )
+                break
+            except httpx.RequestError:
+                logger.warning(f"Cannot connect to {url}. Wait for 5 seconds.")
+                try_time += 1
+                if try_time >= retry:
+                    break
+                # Retry on the same shared client; see comment in get_url().
+                await asyncio.sleep(5)
+            except Exception as e:
+                logger.debug(e)
+                break
+        logger.error(f"Failed connecting to {url}")
+        logger.warning("Please check DNS/Connection settings")
+        return None
+
+    async def check_url(self, url: str):
+        assert (
+            self._client is not None
+        ), "RequestURL must be used as an async context manager"
+        if "://" not in url:
+            url = f"http://{url}"
+        try:
+            req = await self._client.head(url=url, headers=self.header)
+            req.raise_for_status()
+            return True
+        except (httpx.RequestError, httpx.HTTPStatusError):
+            logger.debug("Cannot connect to %s.", url)
+            return False
+
+    async def post_form(self, url: str, data: dict, files):
+        assert (
+            self._client is not None
+        ), "RequestURL must be used as an async context manager"
+        try:
+            req = await self._client.post(
+                url=url, headers=self.header, data=data, files=files
+            )
+            req.raise_for_status()
+            return req
+        except httpx.HTTPStatusError as e:
+            # 别把服务端拒绝（4xx/5xx）误报成连接失败：响应体里通常带有明确的
+            # 拒绝原因（如 Telegram 的 JSON description），排查 #1094 全靠它。
+            logger.warning(
+                "HTTP %s from %s: %s",
+                e.response.status_code,
+                url,
+                e.response.text[:200],
+            )
+            return None
+        except httpx.RequestError:
+            logger.warning(f"Cannot connect to {url}.")
+            return None
+
+    async def post_json(self, url: str, json_data: dict, headers: dict | None = None):
+        """POST a JSON body (httpx ``json=``, not form-encoded ``data=``).
+
+        Used by JSON-body notification providers (Discord, Webhook, Gotify,
+        Bark) that reject form-encoded requests.
+        """
+        assert (
+            self._client is not None
+        ), "RequestURL must be used as an async context manager"
+        try:
+            req = await self._client.post(
+                url=url, headers=headers or self.header, json=json_data
+            )
+            req.raise_for_status()
+            return req
+        except (httpx.RequestError, httpx.HTTPStatusError):
+            logger.warning(f"Cannot connect to {url}.")
+            return None
+
+    async def __aenter__(self):
+        self._client = await get_shared_client()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        # Client is shared and torn down independently (shutdown() /
+        # reset_shared_client()), so there is nothing to release here. Do NOT
+        # reset self._client to None: callers that keep one long-lived
+        # RequestContent/provider instance around (e.g. NotificationManager's
+        # providers) may have several overlapping `async with` blocks on the
+        # *same* instance in flight concurrently (see loops.py gathering
+        # notifications), and nulling the pointer on the first one to finish
+        # would break the others mid-request.
+        pass

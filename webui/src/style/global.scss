@@ -1,0 +1,86 @@
+// Base styles
+
+html {
+  color-scheme: light;
+
+  &.dark {
+    color-scheme: dark;
+  }
+}
+
+body {
+  font-family: var(--font-family);
+  color: var(--color-text);
+  background-color: var(--color-bg);
+  transition: color var(--transition-normal), background-color var(--transition-normal);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+// Scrollbar
+::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-color);
+}
+
+::-webkit-scrollbar-track-piece {
+  opacity: 0;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: calc(var(--scrollbar-size) / 2);
+  background: var(--scrollbar-thumb-color);
+
+  &:hover {
+    background: var(--scrollbar-thumb-hover-color);
+  }
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+}
+
+::-webkit-scrollbar-corner {
+  background-color: transparent;
+}
+
+// Remove number input spinners
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+// Reduced motion
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+// Focus visible ring
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+// iOS Safari auto-zoom prevention
+// iOS Safari zooms in when focusing inputs with font-size < 16px
+// This rule ensures all form inputs are at least 16px on touch devices
+@media (hover: none) and (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
