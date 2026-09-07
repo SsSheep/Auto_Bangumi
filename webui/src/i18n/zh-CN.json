@@ -80,9 +80,10 @@
                    "normal_set":  {
                                       "debug":  "调试",
                                       "rename_interval":  "重命名间隔（秒）",
-                                      "rss_interval":  "RSS 检查间隔（秒）",
+                                      "rss_interval":  "未定时订阅的检查间隔（秒）",
                                       "title":  "常规设置",
-                                      "web_port":  "网页端口"
+                                      "web_port":  "网页端口",
+                                      "rss_interval_hint":  "只作用于未设置检查计划的订阅；设了固定间隔或每周定时的订阅严格按自己的计划执行。建议不超过订阅的最小检查间隔。"
                                   },
                    "notification_set":  {
                                             "title":  "通知设置",

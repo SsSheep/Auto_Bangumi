@@ -14,6 +14,7 @@ const programItems: SettingItem<Program>[] = [
     label: () => t('config.normal_set.rss_interval'),
     type: 'input',
     css: 'w-72',
+    description: t('config.normal_set.rss_interval_hint'),
     prop: {
       type: 'number',
       placeholder: '900',

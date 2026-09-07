@@ -33,6 +33,7 @@ from module.update import (
 )
 
 from .loops import (
+    RSS_SCAN_TICK,
     calendar_tick,
     offset_scan_tick,
     rename_tick,
@@ -116,7 +117,9 @@ class AppContext:
                 PeriodicTask(
                     name="rss",
                     run=lambda: rss_tick(analyser, notifier),
-                    interval=lambda: settings_obj.program.rss_time,
+                    # 扫描节拍与 rss_time 解耦：每分钟扫一次到期任务，
+                    # rss_time 只作为"未定时订阅"的检查间隔（由引擎判断）
+                    interval=lambda: RSS_SCAN_TICK,
                     enabled=Checker.check_analyser,
                 ),
                 PeriodicTask(

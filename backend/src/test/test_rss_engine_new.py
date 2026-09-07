@@ -577,7 +577,17 @@ class TestRefreshRssRetry:
             client.add_torrent.assert_called_once()
             assert await rss_engine.db.torrent.search_all() == []
 
-            # Tick 2: same feed item is still there, add now succeeds
+            # Tick 2: same feed item is still there, add now succeeds.
+            # 无单独计划的订阅按 rss_time 节流：把上次检查时间拨回过期，
+            # 模拟下一个检查周期到达。
+            from datetime import datetime, timedelta, timezone
+
+            bangumis = await rss_engine.db.bangumi.search_all()
+            bangumis[0].last_check_time = (
+                datetime.now(timezone.utc) - timedelta(seconds=1000)
+            ).isoformat()
+            rss_engine.db.add(bangumis[0])
+            await rss_engine.db.commit()
             mock_get.return_value = [feed_torrent()]
             client.add_torrent = AsyncMock(return_value=AddResult.ADDED)
             await rss_engine.refresh_rss(client)

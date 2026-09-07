@@ -80,9 +80,10 @@
                    "normal_set":  {
                                       "debug":  "Debug",
                                       "rename_interval":  "Rename interval (seconds)",
-                                      "rss_interval":  "RSS check interval (seconds)",
+                                      "rss_interval":  "Check interval for unscheduled subscriptions (s)",
                                       "title":  "Normal Setting",
-                                      "web_port":  "WebUI Port"
+                                      "web_port":  "WebUI Port",
+                                      "rss_interval_hint":  "Applies only to subscriptions without a check schedule; scheduled ones (interval/weekly) run exactly on their own plan. Keep it no larger than your smallest per-subscription interval."
                                   },
                    "notification_set":  {
                                             "title":  "Notification Setting",

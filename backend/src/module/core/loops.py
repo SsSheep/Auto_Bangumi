@@ -6,6 +6,7 @@
 
 import asyncio
 import logging
+import time
 
 from module.conf import settings
 from module.database import Database
@@ -19,32 +20,52 @@ from .offset_scanner import OffsetScanner
 
 logger = logging.getLogger(__name__)
 
+# RSS 扫描节拍：调度器按此间隔扫描各订阅是否到期。订阅计划（固定间隔/
+# 每周定时）的执行精度由此值决定（±1 个节拍）；program.rss_time 只作为
+# "未定时订阅"的检查间隔，由引擎的到期判断消费。
+RSS_SCAN_TICK = 60
+
+# 聚合源分析与整季补全按 rss_time 节流（较重，不必每个扫描节拍都跑）
+_aggregate_last_run = 0.0
+
+
+def _aggregate_due() -> bool:
+    """聚合分析/补全是否到执行时间（按 rss_time 节流）。"""
+    global _aggregate_last_run
+    now = time.monotonic()
+    if now - _aggregate_last_run < settings.program.rss_time:
+        return False
+    _aggregate_last_run = now
+    return True
+
 
 async def rss_tick(analyser: RSSAnalyser, notifier: NotificationManager) -> None:
     """Analyse aggregate RSS feeds and refresh the RSS engine once."""
+    heavy_due = _aggregate_due()
     async with DownloadClient() as client:
         async with Database() as db:
             engine = RSSEngine(db)
             # Analyse RSS
-            rss_list = await db.rss.search_aggregate()
-            for rss in rss_list:
-                try:
-                    await analyser.rss_to_data(rss, engine)
-                except Exception:
-                    # 仅当该 RSS 确实已在遍历期间被 API 删除时才视为预期情况；
-                    # 其余异常可能是真实 bug，需在 WARNING 级别带完整堆栈。
-                    if await db.rss.search_id(rss.id) is None:
-                        logger.debug(
-                            "Skipping RSS id=%s, deleted during iteration",
-                            rss.id,
-                        )
-                    else:
-                        logger.warning(
-                            "Error analysing RSS id=%s (%s)",
-                            rss.id,
-                            rss.url,
-                            exc_info=True,
-                        )
+            if heavy_due:
+                rss_list = await db.rss.search_aggregate()
+                for rss in rss_list:
+                    try:
+                        await analyser.rss_to_data(rss, engine)
+                    except Exception:
+                        # 仅当该 RSS 确实已在遍历期间被 API 删除时才视为预期情况；
+                        # 其余异常可能是真实 bug，需在 WARNING 级别带完整堆栈。
+                        if await db.rss.search_id(rss.id) is None:
+                            logger.debug(
+                                "Skipping RSS id=%s, deleted during iteration",
+                                rss.id,
+                            )
+                        else:
+                            logger.warning(
+                                "Error analysing RSS id=%s (%s)",
+                                rss.id,
+                                rss.url,
+                                exc_info=True,
+                            )
             # Run RSS Engine
             events = await engine.refresh_rss(client)
     if events:
@@ -56,7 +77,7 @@ async def rss_tick(analyser: RSSAnalyser, notifier: NotificationManager) -> None
         # notification latency (#1026 fallout: many feeds can fail in the
         # same tick when a whole host is unreachable).
         await asyncio.gather(*[notifier.send_event(e) for e in events])
-    if settings.bangumi_manage.eps_complete:
+    if heavy_due and settings.bangumi_manage.eps_complete:
         await eps_complete()
 
 

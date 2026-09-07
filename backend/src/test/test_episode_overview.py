@@ -26,11 +26,30 @@ async def db(db_engine):
 
 
 class TestBangumiCheckDue:
-    def test_no_interval_follows_global(self):
-        from datetime import datetime, timezone
+    def test_no_interval_follows_global(self, monkeypatch):
+        from datetime import datetime, timedelta, timezone
 
+        from module.conf import settings
+
+        monkeypatch.setattr(
+            settings.program, "rss_time", 900, raising=False
+        )
+        now = datetime.now(timezone.utc)
+        # 从未检查过 → 到期
         b = make_bangumi(check_interval=None, last_check_time=None)
-        assert _bangumi_check_due(b, datetime.now(timezone.utc)) is True
+        assert _bangumi_check_due(b, now) is True
+        # 刚检查过（间隔未满）→ 未到期
+        b = make_bangumi(
+            check_interval=None,
+            last_check_time=(now - timedelta(seconds=60)).isoformat(),
+        )
+        assert _bangumi_check_due(b, now) is False
+        # 距上次检查超过 rss_time → 到期
+        b = make_bangumi(
+            check_interval=None,
+            last_check_time=(now - timedelta(seconds=901)).isoformat(),
+        )
+        assert _bangumi_check_due(b, now) is True
 
     def test_interval_not_elapsed(self):
         from datetime import datetime, timezone

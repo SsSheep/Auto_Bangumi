@@ -140,7 +140,8 @@ def _bangumi_check_due(bangumi: Bangumi, now: datetime) -> bool:
 
     interval = bangumi.check_interval
     if not interval or interval <= 0:
-        return True
+        # 无单独计划 = 跟随全局：rss_time 即未定时订阅的检查间隔
+        interval = settings.program.rss_time
     return _interval_due(now, interval, last)
 
 

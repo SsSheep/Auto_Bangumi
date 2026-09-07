@@ -1,4 +1,4 @@
-# Byte-compiled / optimized / DLL files
+﻿# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
@@ -235,3 +235,12 @@ test.*
 # Local dev environment (scripts/dev.sh) and design-tool state
 .dev/
 .impeccable/
+
+# Local debug/verification scripts
+_check_*.py
+_set_*.py
+_test_*.py
+_debug*.py
+_dump_*.py
+_restore.py
+"$null"
