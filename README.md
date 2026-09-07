@@ -132,7 +132,6 @@
 
 含 v25 ~ v28 迁移（单订阅检查计划、剧集标签覆盖、剧集总览缓存），旧数据库启动时自动升级，无需手动操作。
 
-## [Roadmap](https://github.com/users/EstrellaXD/projects/2)
 
 ***已支持的下载器：***
 
