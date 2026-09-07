@@ -24,8 +24,7 @@
 </p>
 
 > [!NOTE]
-> 本项目是基于 [EstrellaXD/AutoBangumi](https://github.com/EstrellaXD/Auto_Bangumi) 3.3 的**增强 Fork**，在原版基础上新增了 Jellyfin 媒体库深度集成、订阅检查计划、剧集总览等大量功能（见下方「本 Fork 新增功能」）。原版功能全部保留，升级替换无缝。
-
+> 本项目是基于 [EstrellaXD/AutoBangumi](https://github.com/EstrellaXD/Auto_Bangumi) 3.3 的**自用修改 Fork**，在原版基础上新增了 Jellyfin 媒体库深度集成、订阅检查计划、剧集总览等大量功能（见下方「本 Fork 新增功能」）。
 本项目是基于 RSS 的全自动追番整理下载工具。只需要在 [Mikan Project][mikan] 等网站上订阅番剧，就可以全自动追番。
 并且整理完成的名称和目录可以直接被 [Plex][plex]、[Jellyfin][plex] 等媒体库软件识别，无需二次刮削。
 
@@ -140,9 +139,6 @@
 - qBittorrent
 - aria2
 
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=EstrellaXD/Auto_Bangumi&type=Date)](https://star-history.com/#EstrellaXD/Auto_Bangumi)
 
 ## 贡献
 
