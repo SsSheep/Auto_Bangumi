@@ -1,5 +1,14 @@
 # syntax=docker/dockerfile:1
 
+# ---- WebUI 构建：编译前端产物（官方镜像由 CI 预构建注入，自建时在此编译） ----
+FROM node:20-alpine AS webui
+WORKDIR /web
+COPY webui/package.json webui/package-lock.json ./
+RUN npm ci
+COPY webui ./
+RUN npm run build
+
+# ---- 后端依赖 ----
 FROM ghcr.io/astral-sh/uv:0.5-python3.13-alpine AS builder
 
 WORKDIR /app
@@ -11,6 +20,9 @@ RUN uv sync --frozen --no-dev
 
 # Copy application source
 COPY backend/src ./src
+
+# 前端产物并入后端（运行时服务自 /app/dist）
+COPY --from=webui /web/dist ./src/dist
 
 
 FROM python:3.13-alpine AS runtime

@@ -20,7 +20,6 @@ declare module '@vue/runtime-core' {
     AbContainer: typeof import('./../../src/components/ab-container.vue')['default']
     AbEditRule: typeof import('./../../src/components/ab-edit-rule.vue')['default']
     AbEmpty: typeof import('./../../src/components/basic/ab-empty.vue')['default']
-    AbEpisodeOverviewTab: typeof import('./../../src/components/ab-episode-overview-tab.vue')['default']
     AbField: typeof import('./../../src/components/basic/ab-field.vue')['default']
     AbFoldPanel: typeof import('./../../src/components/ab-fold-panel.vue')['default']
     AbIconButton: typeof import('./../../src/components/basic/ab-icon-button.vue')['default']
