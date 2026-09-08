@@ -19,6 +19,13 @@ RUN uv sync --frozen --no-dev
 # Copy application source
 COPY backend/src ./src
 
+# 构建期生成 module/__version__.py：conf/config.py 靠它识别正式版；缺失时回退
+# DEV_VERSION，main.py 会把 / 重定向到 /docs（Swagger），配置文件名也会走
+# config_dev.json —— 均为开发行为。上游 CI（build.yml）在构建前生成该文件，
+# 本文件直接由 ARG 生成，保证任何环境下构建都注入真实版本。
+ARG VERSION=DEV_VERSION
+RUN echo "VERSION='${VERSION}'" > ./src/module/__version__.py
+
 # 前端产物并入后端（运行时服务自 /app/dist）
 COPY --from=webui /web/dist ./src/dist
 
