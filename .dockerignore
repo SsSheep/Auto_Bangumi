@@ -42,3 +42,10 @@ config
 test
 .env
 test.py
+# webui 构建上下文瘦身：依赖与产物在镜像内重新构建
+webui/node_modules
+webui/dist
+webui/dev-dist
+webui/test-results
+webui/playwright-report
+webui/coverage

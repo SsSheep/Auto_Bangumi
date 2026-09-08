@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 # ---- WebUI 构建：编译前端产物（官方镜像由 CI 预构建注入，自建时在此编译） ----
 FROM node:20-alpine AS webui
 WORKDIR /web
