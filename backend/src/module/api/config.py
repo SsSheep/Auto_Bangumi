@@ -222,3 +222,58 @@ async def list_llm_models(req: LLMModelsRequest):
     finally:
         await parser.aclose()
     return LLMModelsResponse(models=models)
+
+
+class TmdbTestRequest(BaseModel):
+    tmdb_base_url: str = ""
+    tmdb_api_key: str = ""
+
+
+class DownloaderTestRequest(BaseModel):
+    type: str = "qbittorrent"
+    host: str = ""
+    username: str = ""
+    password: str = ""
+
+
+class JellyfinTestRequest(BaseModel):
+    jellyfin_host: str = ""
+    jellyfin_api_key: str = ""
+
+
+def _test_result_payload(result: dict) -> JSONResponse:
+    return JSONResponse(
+        status_code=200,
+        content={"status": result["ok"], **result},
+    )
+
+
+@router.post(
+    "/test/tmdb", dependencies=[Depends(get_current_user)]
+)
+async def test_tmdb_connectivity(req: TmdbTestRequest):
+    """按表单当前值测试 TMDB 连通性（密钥为掩码/空时回退已保存值）。"""
+    from module.manager.connectivity import test_tmdb
+
+    result = await test_tmdb(req.tmdb_base_url, req.tmdb_api_key)
+    return _test_result_payload(result)
+
+
+@router.post(
+    "/test/downloader", dependencies=[Depends(get_current_user)]
+)
+async def test_downloader_connectivity(req: DownloaderTestRequest):
+    from module.manager.connectivity import test_downloader
+
+    result = await test_downloader(req.type, req.host, req.username, req.password)
+    return _test_result_payload(result)
+
+
+@router.post(
+    "/test/jellyfin", dependencies=[Depends(get_current_user)]
+)
+async def test_jellyfin_connectivity(req: JellyfinTestRequest):
+    from module.manager.connectivity import test_jellyfin
+
+    result = await test_jellyfin(req.jellyfin_host, req.jellyfin_api_key)
+    return _test_result_payload(result)

@@ -55,6 +55,14 @@ const items: SettingItem<MediaLibrary>[] = [
         v-bind="i"
         v-model:data="mediaLibrary[i.configKey]"
       ></ab-setting>
+      <ConnTestRow
+        :label="t('config.media_set.test_conn')"
+        target="jellyfin"
+        :payload="() => ({
+          jellyfin_host: mediaLibrary.jellyfin_host,
+          jellyfin_api_key: mediaLibrary.jellyfin_api_key,
+        })"
+      />
     </div>
   </ab-fold-panel>
 </template>

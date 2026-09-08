@@ -47,6 +47,14 @@ const items: SettingItem<Network>[] = [
         v-bind="i"
         v-model:data="network[i.configKey]"
       ></ab-setting>
+      <ConnTestRow
+        :label="t('config.network_set.test_conn')"
+        target="tmdb"
+        :payload="() => ({
+          tmdb_base_url: network.tmdb_base_url,
+          tmdb_api_key: network.tmdb_api_key,
+        })"
+      />
     </div>
   </ab-fold-panel>
 </template>

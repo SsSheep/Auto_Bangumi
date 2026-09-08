@@ -53,8 +53,8 @@ class RequestContent(RequestURL):
         return None
 
     # API JSON
-    async def get_json(self, _url) -> dict | None:
-        req = await self.get_url(_url)
+    async def get_json(self, _url, headers: dict | None = None) -> dict | None:
+        req = await self.get_url(_url, headers=headers)
         if req:
             return req.json()
         return None

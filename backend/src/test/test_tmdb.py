@@ -52,7 +52,7 @@ _SHOW_INFO = {
 }
 
 
-async def _fake_get_json(url: str) -> dict:
+async def _fake_get_json(url: str, headers: dict | None = None) -> dict:
     if "/search/tv" in url:
         return {"results": [{"id": 82684}]}
     if "/season/" in url:
@@ -97,7 +97,7 @@ async def test_tmdb_parser_movie_fallback_when_tv_search_misses(mocker):
 
     search_requests: list[tuple[str, dict[str, list[str]]]] = []
 
-    async def fake_get_json(url: str) -> dict:
+    async def fake_get_json(url: str, headers: dict | None = None) -> dict:
         if "/search/tv" in url:
             search_requests.append(("tv", _query_params(url)))
             return {"results": []}
@@ -131,7 +131,7 @@ async def test_tmdb_parser_is_movie_queries_movie_search_directly(mocker):
     """is_movie=True skips the TV search entirely and queries search/movie."""
     tv_search_called = False
 
-    async def fake_get_json(url: str) -> dict:
+    async def fake_get_json(url: str, headers: dict | None = None) -> dict:
         nonlocal tv_search_called
         if "/search/tv" in url:
             tv_search_called = True
@@ -155,7 +155,7 @@ async def test_tmdb_parser_is_movie_queries_movie_search_directly(mocker):
 async def test_tv_whitespace_retry_preserves_language(mocker):
     search_requests: list[dict[str, list[str]]] = []
 
-    async def fake_get_json(url: str) -> dict:
+    async def fake_get_json(url: str, headers: dict | None = None) -> dict:
         if "/search/tv" in url:
             query = _query_params(url)
             search_requests.append(query)
@@ -187,7 +187,7 @@ async def test_tv_whitespace_retry_preserves_language(mocker):
 async def test_movie_whitespace_retry_preserves_language(mocker):
     search_requests: list[dict[str, list[str]]] = []
 
-    async def fake_get_json(url: str) -> dict:
+    async def fake_get_json(url: str, headers: dict | None = None) -> dict:
         if "/search/movie" not in url:
             return {}
         query = _query_params(url)
@@ -215,7 +215,7 @@ async def test_movie_whitespace_retry_preserves_language(mocker):
 
 
 async def test_tmdb_parser_movie_search_no_results_returns_none(mocker):
-    async def fake_get_json(url: str) -> dict:
+    async def fake_get_json(url: str, headers: dict | None = None) -> dict:
         return {"results": []}
 
     mocker.patch.object(
@@ -318,3 +318,28 @@ async def test_tmdb_parser_live():
     assert tmdb_info.title == "冰海战记"
     assert tmdb_info.year == bangumi_year
     assert tmdb_info.last_season == bangumi_season
+
+
+# ---------------------------------------------------------------------------
+# v4 Read Access Token（JWT）：URL 不带 api_key，鉴权走 Bearer 头
+# ---------------------------------------------------------------------------
+
+
+def test_v4_token_urls_and_headers(monkeypatch):
+    v4 = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig"
+    monkeypatch.setattr(
+        tmdb_parser_module.settings.network, "tmdb_api_key", v4
+    )
+    assert "api_key" not in tmdb_parser_module.search_url("test", "zh")
+    assert "api_key" not in tmdb_parser_module.info_url(123, "zh")
+    assert "api_key" not in tmdb_parser_module.season_url(123, 1, "zh")
+    assert tmdb_parser_module.tmdb_auth_headers() == {"Authorization": f"Bearer {v4}"}
+
+
+def test_v3_key_urls_and_headers(monkeypatch):
+    monkeypatch.setattr(
+        tmdb_parser_module.settings.network, "tmdb_api_key", "32b19d6a05b512190a056fa4e747cbbc"
+    )
+    assert "api_key=32b19d6a" in tmdb_parser_module.search_url("test", "zh")
+    assert "api_key=32b19d6a" in tmdb_parser_module.info_url(123, "zh")
+    assert tmdb_parser_module.tmdb_auth_headers() == {}

@@ -12,6 +12,7 @@
                    "unsaved_count":  "{count} 处未保存修改",
                    "unsaved_none":  "暂无未保存修改",
                    "downloader_set":  {
+                                          "test_conn":  "测试下载器连接",
                                           "aria2_hint":  "aria2 请在密码栏填入 RPC secret（用户名会被忽略）。地址示例：172.17.0.1:6800",
                                           "host":  "下载器地址",
                                           "password":  "密码",
@@ -128,12 +129,14 @@
                                      "username":  "用户名"
                                  },
                    "network_set":  {
+                                       "test_conn":  "测试 TMDB 连接",
                                        "bgm_base_url":  "Bangumi API 地址",
                                        "title":  "网络设置",
                                        "tmdb_api_key":  "TMDB API Key（可选）",
                                        "tmdb_base_url":  "TMDB API 地址"
                                    },
                    "media_set":  {
+                                     "test_conn":  "测试 Jellyfin 连接",
                                      "title":  "媒体库（Jellyfin）",
                                      "enable":  "启用 Jellyfin 集成",
                                      "host":  "Jellyfin 地址",

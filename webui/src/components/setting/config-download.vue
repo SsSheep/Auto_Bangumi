@@ -78,6 +78,16 @@ const items: SettingItem<Downloader>[] = [
         v-bind="i"
         v-model:data="downloader[i.configKey]"
       ></ab-setting>
+      <ConnTestRow
+        :label="t('config.downloader_set.test_conn')"
+        target="downloader"
+        :payload="() => ({
+          type: downloader.type,
+          host: downloader.host,
+          username: downloader.username,
+          password: downloader.password,
+        })"
+      />
     </div>
   </ab-fold-panel>
 </template>

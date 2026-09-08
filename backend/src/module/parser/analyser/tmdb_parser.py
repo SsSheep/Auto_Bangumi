@@ -24,6 +24,24 @@ def _api_key() -> str:
     return settings.network.tmdb_api_key or TMDB_API
 
 
+def _is_v4_token(key: str) -> bool:
+    """TMDB v4 Read Access Token 是 JWT（ey 开头、含两个点）。
+
+    v4 token 只能用 Authorization: Bearer 头；塞进 ``api_key`` 查询参数会被
+    TMDB 拒绝（401 Invalid API key）。TMDB 现已不再签发 v3 key，用户从账号
+    设置页复制到的都是 v4 token，必须按此识别。
+    """
+    return key.startswith("eyJ") and key.count(".") == 2
+
+
+def tmdb_auth_headers() -> dict:
+    """v4 token 走 Bearer 头；v3 key 返回空 dict（鉴权在 URL 参数里）。"""
+    key = _api_key()
+    if _is_v4_token(key):
+        return {"Authorization": f"Bearer {key}"}
+    return {}
+
+
 # In-memory cache for TMDB lookups to avoid repeated API calls
 _TMDB_CACHE_MAX = 512
 _tmdb_cache: OrderedDict[str, "TMDBInfo | None"] = OrderedDict()
@@ -65,42 +83,48 @@ LANGUAGE = {"zh": "zh-CN", "jp": "ja-JP", "en": "en-US"}
 
 
 def search_url(e, key="zh"):
-    query = urlencode(
-        {
-            "api_key": _api_key(),
-            "page": 1,
-            "query": e,
-            "include_adult": "false",
-            "language": LANGUAGE[key],
-        }
-    )
-    return f"{_tmdb_url()}/3/search/tv?{query}"
+    query = {
+        "page": 1,
+        "query": e,
+        "include_adult": "false",
+        "language": LANGUAGE[key],
+    }
+    # v4 token 走 Bearer 头（见 tmdb_auth_headers），URL 里不再带 api_key
+    if not _is_v4_token(_api_key()):
+        query["api_key"] = _api_key()
+    return f"{_tmdb_url()}/3/search/tv?{urlencode(query)}"
 
 
 def search_movie_url(e, key="zh"):
-    query = urlencode(
-        {
-            "api_key": _api_key(),
-            "page": 1,
-            "query": e,
-            "include_adult": "false",
-            "language": LANGUAGE[key],
-        }
-    )
-    return f"{_tmdb_url()}/3/search/movie?{query}"
+    query = {
+        "page": 1,
+        "query": e,
+        "include_adult": "false",
+        "language": LANGUAGE[key],
+    }
+    if not _is_v4_token(_api_key()):
+        query["api_key"] = _api_key()
+    return f"{_tmdb_url()}/3/search/movie?{urlencode(query)}"
 
 
 def info_url(e, key):
-    return f"{_tmdb_url()}/3/tv/{e}?api_key={_api_key()}&language={LANGUAGE[key]}"
+    return _detail_url(f"/3/tv/{e}", LANGUAGE[key])
 
 
 def season_url(tv_id, season_number, key):
-    return f"{_tmdb_url()}/3/tv/{tv_id}/season/{season_number}?api_key={_api_key()}&language={LANGUAGE[key]}"
+    return _detail_url(f"/3/tv/{tv_id}/season/{season_number}", LANGUAGE[key])
+
+
+def _detail_url(path: str, language: str) -> str:
+    """tv 详情/季度端点的 URL；v4 token 时省略 api_key 参数。"""
+    if _is_v4_token(_api_key()):
+        return f"{_tmdb_url()}{path}?language={language}"
+    return f"{_tmdb_url()}{path}?api_key={_api_key()}&language={language}"
 
 
 async def is_animation(tv_id, language, req: RequestContent) -> bool:
     url_info = info_url(tv_id, language)
-    type_id = await req.get_json(url_info)
+    type_id = await req.get_json(url_info, headers=tmdb_auth_headers())
     if type_id:
         for type in type_id.get("genres", []):
             if type.get("id") == 16:
@@ -119,7 +143,7 @@ async def get_season_episode_air_dates(
     import datetime
 
     url = season_url(tv_id, season_number, language)
-    season_data = await req.get_json(url)
+    season_data = await req.get_json(url, headers=tmdb_auth_headers())
     if not season_data:
         return []
 
@@ -192,7 +216,7 @@ async def get_aired_episode_count(
     import datetime
 
     url = season_url(tv_id, season_number, language)
-    season_data = await req.get_json(url)
+    season_data = await req.get_json(url, headers=tmdb_auth_headers())
     if not season_data:
         return 0
 
@@ -245,11 +269,11 @@ async def _search_movie(
     电影没有季度概念，因此不复用剧集的季度/集数聚合逻辑，仅返回标题、原名、
     年份与海报等基本信息。"""
     url = search_movie_url(title, language)
-    contents = await req.get_json(url)
+    contents = await req.get_json(url, headers=tmdb_auth_headers())
     results = (contents or {}).get("results") or []
     if not results:
         url = search_movie_url(title.replace(" ", ""), language)
-        contents = await req.get_json(url)
+        contents = await req.get_json(url, headers=tmdb_auth_headers())
         results = (contents or {}).get("results") or []
     if not results:
         return None
@@ -289,13 +313,13 @@ async def tmdb_parser(
             _tmdb_cache[cache_key] = result
             return result
         url = search_url(title, language)
-        contents = await req.get_json(url)
+        contents = await req.get_json(url, headers=tmdb_auth_headers())
         if not contents:
             return await _search_movie(title, language, req)
         contents = (contents or {}).get("results") or []
         if not contents:
             url = search_url(title.replace(" ", ""), language)
-            contents_resp = await req.get_json(url)
+            contents_resp = await req.get_json(url, headers=tmdb_auth_headers())
             if not contents_resp:
                 return await _search_movie(title, language, req)
             contents = (contents_resp or {}).get("results") or []
@@ -316,7 +340,7 @@ async def tmdb_parser(
                 # TMDB hiccup shouldn't poison this title for the process lifetime.
                 return await _search_movie(title, language, req)
             url_info = info_url(matched_id, language)
-            info_content = await req.get_json(url_info)
+            info_content = await req.get_json(url_info, headers=tmdb_auth_headers())
             season = [
                 {
                     "season": s.get("name"),

@@ -12,6 +12,7 @@
                    "unsaved_count":  "1 unsaved change | {count} unsaved changes",
                    "unsaved_none":  "No unsaved changes",
                    "downloader_set":  {
+                                          "test_conn":  "Test downloader connection",
                                           "aria2_hint":  "For aria2, enter the RPC secret in the password field (username is ignored). Host example: 172.17.0.1:6800",
                                           "host":  "Host",
                                           "password":  "Password",
@@ -128,12 +129,14 @@
                                      "username":  "Username"
                                  },
                    "network_set":  {
+                                       "test_conn":  "Test TMDB connection",
                                        "bgm_base_url":  "Bangumi API URL",
                                        "title":  "Network Setting",
                                        "tmdb_api_key":  "TMDB API Key (optional)",
                                        "tmdb_base_url":  "TMDB API URL"
                                    },
                    "media_set":  {
+                                     "test_conn":  "Test Jellyfin connection",
                                      "title":  "Media Library (Jellyfin)",
                                      "enable":  "Enable Jellyfin integration",
                                      "host":  "Jellyfin URL",

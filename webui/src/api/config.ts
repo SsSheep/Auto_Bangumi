@@ -38,4 +38,22 @@ export const apiConfig = {
     );
     return data.models;
   },
+
+  /**
+   * 设置页连通性测试（TMDB / 下载器 / Jellyfin）。
+   * 密码、密钥为掩码或空时，后端回退到已保存配置再测。
+   */
+  async testConnection(
+    target: 'tmdb' | 'downloader' | 'jellyfin',
+    payload: Record<string, string>
+  ) {
+    const { data } = await axios.post<{
+      ok: boolean;
+      latency_ms: number;
+      msg_zh: string;
+      msg_en: string;
+      detail: string | null;
+    }>(`api/v1/config/test/${target}`, payload, { silent: true });
+    return data;
+  },
 };

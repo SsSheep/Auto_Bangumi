@@ -81,6 +81,7 @@ declare module '@vue/runtime-core' {
     ConfigProxy: typeof import('./../../src/components/setting/config-proxy.vue')['default']
     ConfigSearchProvider: typeof import('./../../src/components/setting/config-search-provider.vue')['default']
     ConfigSecurity: typeof import('./../../src/components/setting/config-security.vue')['default']
+    ConnTestRow: typeof import('./../../src/components/setting/conn-test-row.vue')['default']
     LlmAuthDialog: typeof import('./../../src/components/setting/llm-auth-dialog.vue')['default']
     MediaQuery: typeof import('./../../src/components/media-query.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']

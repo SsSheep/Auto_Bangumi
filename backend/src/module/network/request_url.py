@@ -50,6 +50,24 @@ def _proxy_config_key() -> str:
     return ""
 
 
+def build_proxy_url() -> str | None:
+    """按当前代理设置构建代理 URL；未启用或类型不支持时返回 None。
+
+    供共享客户端与连通性测试等需要自建短超时客户端的模块复用，
+    保证"测试看到的网络环境"与应用实际请求一致。
+    """
+    if not settings.proxy.enable:
+        return None
+    auth = ""
+    if settings.proxy.username:
+        auth = f"{settings.proxy.username}:{settings.proxy.password}@"
+    if "http" in settings.proxy.type:
+        return f"http://{auth}{settings.proxy.host}:{settings.proxy.port}"
+    if settings.proxy.type == "socks5":
+        return f"socks5://{auth}{settings.proxy.host}:{settings.proxy.port}"
+    return None
+
+
 async def get_shared_client() -> httpx.AsyncClient:
     global _shared_client, _shared_client_proxy_key
     current_key = _proxy_config_key()
@@ -66,22 +84,12 @@ async def get_shared_client() -> httpx.AsyncClient:
         "limits": _CONNECTION_LIMITS,
         "follow_redirects": True,
     }
-    if settings.proxy.enable:
-        if "http" in settings.proxy.type:
-            if settings.proxy.username:
-                proxy_url = f"http://{settings.proxy.username}:{settings.proxy.password}@{settings.proxy.host}:{settings.proxy.port}"
-            else:
-                proxy_url = f"http://{settings.proxy.host}:{settings.proxy.port}"
-            _shared_client = httpx.AsyncClient(proxy=proxy_url, **common_kwargs)
-        elif settings.proxy.type == "socks5":
-            if settings.proxy.username:
-                socks_url = f"socks5://{settings.proxy.username}:{settings.proxy.password}@{settings.proxy.host}:{settings.proxy.port}"
-            else:
-                socks_url = f"socks5://{settings.proxy.host}:{settings.proxy.port}"
-            transport = AsyncProxyTransport.from_url(socks_url, rdns=True)
-            _shared_client = httpx.AsyncClient(transport=transport, **common_kwargs)
-        else:
-            _shared_client = httpx.AsyncClient(**common_kwargs)
+    proxy_url = build_proxy_url()
+    if proxy_url and proxy_url.startswith("socks5://"):
+        transport = AsyncProxyTransport.from_url(proxy_url, rdns=True)
+        _shared_client = httpx.AsyncClient(transport=transport, **common_kwargs)
+    elif proxy_url:
+        _shared_client = httpx.AsyncClient(proxy=proxy_url, **common_kwargs)
     else:
         _shared_client = httpx.AsyncClient(**common_kwargs)
     _shared_client_proxy_key = current_key
@@ -122,15 +130,17 @@ class RequestURL:
             base_headers["Accept"] = "application/xml, text/xml, */*"
         return base_headers
 
-    async def get_url(self, url, retry=3):
+    async def get_url(self, url, retry=3, headers: dict | None = None):
         assert (
             self._client is not None
         ), "RequestURL must be used as an async context manager"
         try_time = 0
-        headers = self._get_headers(url)
+        base_headers = self._get_headers(url)
+        if headers:
+            base_headers.update(headers)
         while True:
             try:
-                req = await self._client.get(url=url, headers=headers)
+                req = await self._client.get(url=url, headers=base_headers)
                 logger.debug(
                     "Successfully connected to %s. Status: %s",
                     url,
