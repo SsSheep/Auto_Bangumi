@@ -2,7 +2,7 @@
 FROM node:20-alpine AS webui
 WORKDIR /web
 COPY webui/package.json webui/package-lock.json ./
-RUN npm ci
+RUN npm install --no-audit --no-fund
 COPY webui ./
 RUN npm run build
 
