@@ -80,7 +80,9 @@ VOLUME ["/app/config", "/app/data"]
 
 # Liveness probe against the unauthenticated /health route; give the app
 # room to run migrations on first boot before failures count.
+# 用 127.0.0.1 而非 localhost：busybox wget 会优先解析 ::1（IPv6），
+# 而 uvicorn 只监听 IPv4，用 localhost 会一直误报 unhealthy。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD wget -qO- http://localhost:7892/health || exit 1
+    CMD wget -qO- http://127.0.0.1:7892/health || exit 1
 
 ENTRYPOINT ["tini", "-g", "--", "/entrypoint.sh"]
