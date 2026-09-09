@@ -215,13 +215,18 @@ class EpisodeOverviewService:
             if bangumi is None or not bangumi.official_title:
                 continue
             try:
-                ep_sets[bid] = await client.get_episode_set(bangumi.official_title)
+                ep_set = await client.get_episode_set(bangumi.official_title)
             except Exception as e:
                 logger.warning(
                     "Jellyfin lookup failed for %s: %s",
                     bangumi.official_title,
                     e,
                 )
+                ep_set = None
+            if ep_set is None:
+                # 比对不可信（未匹配/失败）：按不在库处理，宁可重复不漏
+                continue
+            ep_sets[bid] = ep_set
 
         def _in_library(t: Torrent) -> bool:
             if t.bangumi_id is None or t.bangumi_id not in ep_sets:
@@ -364,6 +369,7 @@ class EpisodeOverviewService:
                 entry.downloaded = True
 
         jellyfin_available = False
+        compared_groups: set[int | None] = set()
         if groups:
             await self._apply_air_dates(groups)
             jf_client = self._jellyfin_client()
@@ -373,8 +379,11 @@ class EpisodeOverviewService:
                     if not group.official_title:
                         continue
                     ep_set = await jf_client.get_episode_set(group.official_title)
-                    if not ep_set:
+                    if ep_set is None:
+                        # 剧集未匹配/查询失败：比对不可信，不参与失效判断
                         continue
+                    # 该组完成了真实比对（空库也算），auto 结果可作失效依据
+                    compared_groups.add(group.bangumi_id)
                     for entry in group.episodes:
                         ep_int = int(entry.episode)
                         # 精确匹配季+集；季号对不上时按集号兜底
@@ -383,21 +392,46 @@ class EpisodeOverviewService:
                         )
                         entry.auto_in_library = entry.in_library
 
-        # 手动覆盖优先于 Jellyfin 自动比对结果
+        # 手动覆盖优先于 Jellyfin 自动比对结果。
+        # 失效规则（方案 A）：覆盖记录了写入时的自动比对结果（基准）；
+        # 本次比对结果相对基准发生变化 → 媒体库状态已变，覆盖的纠错
+        # 使命完成，自动失效并采用新结果；未变化 → 覆盖继续生效。
+        # 仅对本轮真实比对过的组做失效判断——Jellyfin 不可用或匹配
+        # 失败时 auto 结果不可信，不能据此失效用户的覆盖。
+        overrides_updated = 0
         overrides = await self.db.episode_override.search_all()
         if overrides:
             override_map = {
-                (o.bangumi_id, o.season, float(o.episode)): o.in_library
-                for o in overrides
+                (o.bangumi_id, o.season, float(o.episode)): o for o in overrides
             }
             for group in groups.values():
                 if group.bangumi_id is None:
                     continue
                 for entry in group.episodes:
                     okey = (group.bangumi_id, entry.season, float(entry.episode))
-                    if okey in override_map:
-                        entry.in_library = override_map[okey]
-                        entry.manual = True
+                    ov = override_map.get(okey)
+                    if ov is None:
+                        continue
+                    if ov.auto_value is None:
+                        # 旧记录无基准：以本次比对结果回填，保持覆盖生效
+                        if group.bangumi_id in compared_groups:
+                            await self.db.episode_override.update_auto_value(
+                                group.bangumi_id,
+                                entry.season,
+                                float(entry.episode),
+                                entry.auto_in_library,
+                            )
+                    elif (
+                        group.bangumi_id in compared_groups
+                        and ov.auto_value != entry.auto_in_library
+                    ):
+                        # 比对结果已变化：覆盖自动失效，回到自动结果
+                        await self.db.episode_override.delete_one(*okey)
+                        entry.manual = False
+                        overrides_updated += 1
+                        continue
+                    entry.in_library = ov.in_library
+                    entry.manual = True
 
         for group in list(groups.values()) + [orphan_group]:
             group.episodes.sort(key=lambda e: (e.season, e.episode))
@@ -406,7 +440,9 @@ class EpisodeOverviewService:
         if orphan_group.unparsed:
             result_groups.append(orphan_group)
         return EpisodeOverview(
-            jellyfin_available=jellyfin_available, groups=result_groups
+            jellyfin_available=jellyfin_available,
+            groups=result_groups,
+            overrides_updated=overrides_updated,
         )
 
     async def set_status(self, rss_id: int, req: EpisodeStatusRequest) -> ResponseModel:
@@ -472,7 +508,13 @@ class EpisodeOverviewService:
             )
         elif req.in_library is not None and req.bangumi_id and req.episode is not None:
             await self.db.episode_override.upsert(
-                req.bangumi_id, req.season, req.episode, req.in_library
+                req.bangumi_id,
+                req.season,
+                req.episode,
+                req.in_library,
+                # 记录写入时的自动结果作为失效基准；前端未提供则为 NULL，
+                # 首次构建时以当时的比对结果回填
+                auto_value=req.auto_in_library,
             )
 
         if req.set_downloaded is not None and req.urls:

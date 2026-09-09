@@ -90,20 +90,26 @@ class JellyfinClient:
                 episodes.append({"season": int(season), "episode": int(episode)})
         return episodes
 
-    async def get_episode_set(self, title: str, season: int | None = None) -> set:
+    async def get_episode_set(
+        self, title: str, season: int | None = None
+    ) -> set | None:
         """查询标题对应剧集在库内的 (season, episode) 集合。
 
-        查询失败（网络/认证）返回空集合并记录日志；season 匹配失败时
-        回退为忽略季号（返回所有季的集数，按 (season, ep) 与 (None, ep)
-        两种键都交给调用方判断）。
+        返回 ``None`` 表示比对不可信（网络/认证失败、找不到该剧集），
+        调用方不应据此下结论；空集合表示比对成功且库内没有该集。
+        两者语义不同——覆盖失效判断只信后者。
         """
         try:
-            async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+            # trust_env=False：媒体库是内网服务，不走系统/环境代理——
+            # 否则 Windows 等带系统代理的环境会把请求送进代理导致比对静默失败
+            async with httpx.AsyncClient(
+                timeout=_TIMEOUT, follow_redirects=True, trust_env=False
+            ) as client:
                 series = await self.find_series(client, title)
                 if not series:
-                    return set()
+                    return None
                 episodes = await self.get_series_episodes(client, series["Id"])
                 return {(e["season"], e["episode"]) for e in episodes}
         except Exception as e:
             logger.warning("Jellyfin query failed for %s: %s", title, e)
-            return set()
+            return None

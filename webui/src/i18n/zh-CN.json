@@ -465,6 +465,7 @@
     "selected_count": "已选 {count} 项",
     "not_in_library": "不在库",
     "manual_tag": "手",
+    "overrides_updated_hint": "Jellyfin 比对结果已变化，已自动更新 {n} 集的\"已在库\"标签",
     "reset_tags_done": "已恢复自动判断的标签",
     "reset_tags": "重置所选标签",
     "tag_toggle_hint": "点击可手动切换此标签",

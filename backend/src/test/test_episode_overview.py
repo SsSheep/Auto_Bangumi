@@ -507,3 +507,170 @@ class TestFilterInLibrary:
         )
         keep, skipped = await EpisodeOverviewService(db).filter_in_library(torrents)
         assert keep == torrents and skipped == []
+
+
+# ---------------------------------------------------------------------------
+# 方案 A：手动覆盖随比对结果变化自动失效
+# ---------------------------------------------------------------------------
+
+
+class _FakeJellyfin:
+    """可控的 Jellyfin 客户端替身：ep_set 决定哪些集在库。"""
+
+    def __init__(self, ep_set):
+        self._ep_set = ep_set
+
+    async def get_episode_set(self, title):
+        return self._ep_set
+
+
+async def _seed_for_override(db):
+    """准备一个有 E01 的订阅 + 手动覆盖，返回 (service, db)。"""
+    await db.rss.add(make_rss_item())
+    await db.bangumi.add(make_bangumi(filter=""))
+    return db
+
+
+async def _build(db, monkeypatch, ep_set):
+    from module.manager import episode_overview as eo
+
+    monkeypatch.setattr(
+        eo.EpisodeOverviewService,
+        "_jellyfin_client",
+        lambda _: _FakeJellyfin(ep_set),
+    )
+    with patch.object(
+        RSSEngine, "_get_torrents", new_callable=AsyncMock
+    ) as mock_get, patch.object(
+        EpisodeOverviewService, "_apply_air_dates", new_callable=AsyncMock
+    ):
+        mock_get.return_value = _feed_torrents()
+        service = EpisodeOverviewService(db)
+        overview = await service.overview(1, force=True)
+        assert overview is not None
+    return overview
+
+
+class TestOverrideAutoInvalidate:
+    async def test_override_expires_when_comparison_changes(self, db, monkeypatch):
+        """写入时 auto=False（不在库），后来 Jellyfin 收录了该集 → 覆盖失效。"""
+        await _seed_for_override(db)
+        await db.episode_override.upsert(1, 1, 1, False, auto_value=False)
+
+        # E01 现已在库（比对结果 True ≠ 基准 False）
+        overview = await _build(db, monkeypatch, {(1, 1)})
+        ep1 = next(e for e in overview.groups[0].episodes if e.episode == 1)
+        assert ep1.in_library is True
+        assert ep1.manual is False
+        assert overview.overrides_updated == 1
+        # 覆盖行已删除
+        assert await db.episode_override.search_one(1, 1, 1) is None
+
+    async def test_override_kept_when_comparison_unchanged(self, db, monkeypatch):
+        """比对结果与基准一致 → 覆盖继续生效（纠正持续性误判）。"""
+        await _seed_for_override(db)
+        # 自动说在库，用户纠正为不在库；Jellyfin 之后没有变化
+        await db.episode_override.upsert(1, 1, 1, False, auto_value=True)
+
+        overview = await _build(db, monkeypatch, {(1, 1)})
+        ep1 = next(e for e in overview.groups[0].episodes if e.episode == 1)
+        assert ep1.in_library is False
+        assert ep1.manual is True
+        assert overview.overrides_updated == 0
+        assert await db.episode_override.search_one(1, 1, 1) is not None
+
+    async def test_legacy_override_without_baseline_backfilled(self, db, monkeypatch):
+        """旧记录（auto_value=NULL）不失效，且以本次比对结果回填基准。"""
+        await _seed_for_override(db)
+        await db.episode_override.upsert(1, 1, 1, False, auto_value=None)
+
+        overview = await _build(db, monkeypatch, {(1, 1)})
+        ep1 = next(e for e in overview.groups[0].episodes if e.episode == 1)
+        # 仍生效
+        assert ep1.in_library is False and ep1.manual is True
+        assert overview.overrides_updated == 0
+        row = await db.episode_override.search_one(1, 1, 1)
+        assert row is not None and row.auto_value is True  # 已回填
+
+    async def test_no_invalidation_when_jellyfin_unavailable(self, db, monkeypatch):
+        """Jellyfin 不可用（比对没跑）→ 不能据此失效覆盖。"""
+        from module.manager import episode_overview as eo
+
+        await _seed_for_override(db)
+        await db.episode_override.upsert(1, 1, 1, False, auto_value=True)
+        monkeypatch.setattr(
+            eo.EpisodeOverviewService, "_jellyfin_client", lambda _: None
+        )
+        with patch.object(
+            RSSEngine, "_get_torrents", new_callable=AsyncMock
+        ) as mock_get, patch.object(
+            EpisodeOverviewService, "_apply_air_dates", new_callable=AsyncMock
+        ):
+            mock_get.return_value = _feed_torrents()
+            overview = await EpisodeOverviewService(db).overview(1, force=True)
+            assert overview is not None
+        ep1 = next(e for e in overview.groups[0].episodes if e.episode == 1)
+        assert ep1.in_library is False and ep1.manual is True
+        assert overview.overrides_updated == 0
+
+    async def test_set_status_records_auto_baseline(self, db):
+        """set_status 带 auto_in_library → 覆盖行记录基准。"""
+        from module.models.episode_overview import EpisodeStatusRequest
+
+        await db.rss.add(make_rss_item())
+        service = EpisodeOverviewService(db)
+        req = EpisodeStatusRequest(
+            bangumi_id=1, season=1, episode=1, in_library=False,
+            auto_in_library=True,
+        )
+        with patch.object(
+            EpisodeOverviewService, "_live_and_stored", new_callable=AsyncMock
+        ) as mock_ls:
+            mock_ls.return_value = ([], {})
+            await service.set_status(1, req)
+        row = await db.episode_override.search_one(1, 1, 1)
+        assert row is not None
+        assert row.in_library is False and row.auto_value is True
+
+
+class TestOverrideEmptyLibraryExpiry:
+    async def test_override_expires_when_library_becomes_empty(self, db, monkeypatch):
+        """剧集匹配成功但库内为空（真实比对=不在库）也要参与失效判断。
+
+        写入时基准 auto=True，之后 Jellyfin 把该剧全部移出（比对=False）
+        → 覆盖失效。
+        """
+        await _seed_for_override(db)
+        await db.episode_override.upsert(1, 1, 1, False, auto_value=True)
+
+        overview = await _build(db, monkeypatch, set())  # 匹配成功但空库
+        ep1 = next(e for e in overview.groups[0].episodes if e.episode == 1)
+        assert ep1.in_library is False
+        assert ep1.manual is False
+        assert overview.overrides_updated == 1
+        assert await db.episode_override.search_one(1, 1, 1) is None
+
+    async def test_override_kept_when_series_unmatched(self, db, monkeypatch):
+        """剧集匹配失败（None）：比对不可信，覆盖保持不失效。"""
+        from module.manager import episode_overview as eo
+
+        class _Unmatched:
+            async def get_episode_set(self, title):
+                return None
+
+        await _seed_for_override(db)
+        await db.episode_override.upsert(1, 1, 1, False, auto_value=True)
+        monkeypatch.setattr(
+            eo.EpisodeOverviewService, "_jellyfin_client", lambda _: _Unmatched()
+        )
+        with patch.object(
+            RSSEngine, "_get_torrents", new_callable=AsyncMock
+        ) as mock_get, patch.object(
+            EpisodeOverviewService, "_apply_air_dates", new_callable=AsyncMock
+        ):
+            mock_get.return_value = _feed_torrents()
+            overview = await EpisodeOverviewService(db).overview(1, force=True)
+            assert overview is not None
+        ep1 = next(e for e in overview.groups[0].episodes if e.episode == 1)
+        assert ep1.in_library is False and ep1.manual is True
+        assert overview.overrides_updated == 0

@@ -465,6 +465,7 @@
     "selected_count": "{count} selected",
     "not_in_library": "Not in Library",
     "manual_tag": "M",
+    "overrides_updated_hint": "Jellyfin comparison changed; {n} episode tag(s) were updated automatically",
     "reset_tags_done": "Tags restored to automatic detection",
     "reset_tags": "Reset Selected",
     "tag_toggle_hint": "Click to toggle this tag manually",

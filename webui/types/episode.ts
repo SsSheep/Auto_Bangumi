@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @type backend/src/module/models/episode_overview.py
  */
 export interface EpisodeTorrentInfo {
@@ -38,4 +38,6 @@ export interface EpisodeOverview {
   groups: BangumiEpisodeGroup[];
   /** 缓存构建时间（UTC ISO 8601），null = 刚构建 */
   cached_at: string | null;
+  /** 本次构建中因比对结果变化而自动失效的手动覆盖数 */
+  overrides_updated?: number;
 }

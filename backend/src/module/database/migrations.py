@@ -887,6 +887,22 @@ MIGRATIONS: tuple[Migration, ...] = (
             ),
         ),
     ),
+    Migration(
+        29,
+        "episode override records the auto comparison baseline",
+        (),
+        all_checks(
+            table_exists("episode_status_override"),
+            column_exists("episode_status_override", "auto_value"),
+        ),
+        (
+            _add_column_if_missing(
+                "episode_status_override",
+                "auto_value",
+                "ALTER TABLE episode_status_override ADD COLUMN auto_value INTEGER",
+            ),
+        ),
+    ),
 )
 
 # 由迁移列表派生，新增迁移时无需手动同步

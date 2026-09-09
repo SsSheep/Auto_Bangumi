@@ -47,6 +47,8 @@ class EpisodeOverview(BaseModel):
     jellyfin_available: bool = False
     groups: list[BangumiEpisodeGroup] = []
     cached_at: Optional[str] = None  # 缓存构建时间（UTC ISO 8601）
+    # 本次构建中因"比对结果已变化"而自动失效的手动覆盖数（方案 A）
+    overrides_updated: int = 0
 
 
 class EpisodeRef(BaseModel):
@@ -64,6 +66,7 @@ class EpisodeStatusRequest(BaseModel):
     season: int = 1
     episode: Optional[float] = None
     in_library: Optional[bool] = None  # 覆盖"已在库"
+    auto_in_library: Optional[bool] = None  # 写入时的自动比对结果（失效基准）
     reset_in_library: bool = False  # 清除单集覆盖，恢复自动比对
     reset_all: bool = False  # 清除该订阅下全部覆盖
     reset_urls: list[str] = []  # 只清除勾选种子对应剧集的覆盖（需拉报文反查）

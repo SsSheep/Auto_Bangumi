@@ -19,11 +19,18 @@ class EpisodeOverrideDatabase:
         return list(result.scalars().all())
 
     async def upsert(
-        self, bangumi_id: int, season: int, episode: float, in_library: bool
+        self,
+        bangumi_id: int,
+        season: int,
+        episode: float,
+        in_library: bool,
+        auto_value: bool | None = None,
     ) -> EpisodeStatusOverride:
+        """写入/更新覆盖；``auto_value`` 为写入时的自动比对结果（失效基准）。"""
         existing = await self.search_one(bangumi_id, season, episode)
         if existing is not None:
             existing.in_library = in_library
+            existing.auto_value = auto_value
             obj = existing
         else:
             obj = EpisodeStatusOverride(
@@ -31,6 +38,7 @@ class EpisodeOverrideDatabase:
                 season=season,
                 episode=episode,
                 in_library=in_library,
+                auto_value=auto_value,
             )
         self.session.add(obj)
         await self.session.commit()
@@ -70,3 +78,14 @@ class EpisodeOverrideDatabase:
         if rows:
             await self.session.commit()
         return len(rows)
+
+    async def update_auto_value(
+        self, bangumi_id: int, season: int, episode: float, auto_value: bool
+    ) -> None:
+        """为已有覆盖回填基准（写入时的自动比对结果）。"""
+        obj = await self.search_one(bangumi_id, season, episode)
+        if obj is None or obj.auto_value is not None:
+            return
+        obj.auto_value = auto_value
+        self.session.add(obj)
+        await self.session.commit()

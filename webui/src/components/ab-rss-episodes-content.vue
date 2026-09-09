@@ -31,6 +31,14 @@ async function load(force = false) {
   selectedUrls.value = new Set();
   try {
     overview.value = await apiRSS.getEpisodes(props.rssId, force);
+    // 方案 A：比对结果变化导致的手动覆盖自动失效，主动告知
+    if (overview.value?.overrides_updated) {
+      message.info(
+        t('rss.overrides_updated_hint', {
+          n: overview.value.overrides_updated,
+        })
+      );
+    }
   } catch (e) {
     console.error('Failed to load episode overview:', e);
     message.error(t('rss.episodes_empty'));
@@ -98,6 +106,8 @@ interface RawFileRow {
   inLibrary: boolean;
   /** "已在库"是否为手动指定 */
   manual: boolean;
+  /** Jellyfin 自动比对结果（手动覆盖的失效基准） */
+  autoInLibrary: boolean;
   /** 是否匹配到了番剧（决定能否手动下载） */
   matched: boolean;
 }
@@ -118,6 +128,7 @@ const rawFiles = computed<RawFileRow[]>(() => {
           bangumiId: group.bangumi_id,
           inLibrary: ep.in_library,
           manual: ep.manual,
+          autoInLibrary: ep.auto_in_library,
           matched: true,
         });
       }
@@ -133,6 +144,7 @@ const rawFiles = computed<RawFileRow[]>(() => {
         bangumiId: group.bangumi_id,
         inLibrary: false,
         manual: false,
+        autoInLibrary: false,
         // orphan 分组的 bangumi_id 为空，视为未匹配
         matched: group.bangumi_id != null,
       });
@@ -182,7 +194,8 @@ async function toggleLibrary(
   bangumiId: number | null,
   season: number,
   episodeNum: number | null,
-  current: boolean
+  current: boolean,
+  currentAuto: boolean
 ) {
   if (bangumiId == null || episodeNum == null || props.rssId == null) return;
   try {
@@ -191,6 +204,8 @@ async function toggleLibrary(
       season,
       episode: episodeNum,
       in_library: !current,
+      // 记录写入时的自动结果：Jellyfin 之后变化时该覆盖自动失效
+      auto_in_library: currentAuto,
     });
     for (const g of overview.value?.groups ?? []) {
       if (g.bangumi_id !== bangumiId) continue;
@@ -386,7 +401,8 @@ async function resetTags() {
                           group.bangumi_id,
                           ep.season,
                           ep.episode,
-                          ep.in_library
+                          ep.in_library,
+                          ep.auto_in_library
                         )
                       "
                     >
@@ -524,7 +540,8 @@ async function resetTags() {
                         row.bangumiId,
                         row.season,
                         row.episodeNum,
-                        row.inLibrary
+                        row.inLibrary,
+                        row.autoInLibrary
                       )
                     "
                   >

@@ -103,6 +103,8 @@ export const apiRSS = {
       season?: number;
       episode?: number | null;
       in_library?: boolean | null;
+      /** 写入时的自动比对结果（覆盖失效基准） */
+      auto_in_library?: boolean | null;
       reset_in_library?: boolean;
       reset_all?: boolean;
       reset_urls?: string[];
