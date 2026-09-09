@@ -157,7 +157,11 @@
 - **媒体库 → 测试 Jellyfin 连接**：验证地址与 API Key，附服务器名称与版本
 - 结果区分**网络不通 / 认证失败 / 服务端拒绝**三类，附延迟毫秒数
 
-![连通性测试](docs/images/conn-tests.png)
+![连通性测试-网络设置](docs/images/conn-tests.png)
+
+![连通性测试-下载设置](docs/images/conn-downloader.png)
+
+![连通性测试-媒体库](docs/images/conn-jellyfin.png)
 
 ### 数据库变更
 
