@@ -178,7 +178,8 @@ async def test_bgm(base_url: str) -> dict:
 
 
 async def test_downloader(dl_type: str, host: str, username: str, password: str) -> dict:
-    host = _normalize_host(host or "")
+    host = _normalize_host(host or settings.downloader.host)
+    username = username or settings.downloader.username
     password = _unmask(password, settings.downloader.password)
 
     start = time.perf_counter()
@@ -290,7 +291,7 @@ async def _test_aria2(host: str, secret: str, start: float) -> dict:
 
 
 async def test_jellyfin(host: str, api_key: str) -> dict:
-    host = _normalize_host(host or "")
+    host = _normalize_host(host or settings.media_library.host)
     api_key = _unmask(api_key, settings.media_library.api_key)
 
     start = time.perf_counter()

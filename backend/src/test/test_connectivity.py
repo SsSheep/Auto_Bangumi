@@ -355,3 +355,30 @@ def test_downloader_endpoint_passes_payload(authed_client):
         )
     assert resp.status_code == 200
     assert resp.json()["ok"] is False
+
+
+# ---------------------------------------------------------------------------
+# 空表单值回退已保存配置（host/username 也回退，与密钥行为一致）
+# ---------------------------------------------------------------------------
+
+
+async def test_downloader_empty_form_falls_back_to_settings():
+    assert connectivity._unmask("", "saved") == "saved"
+
+
+async def test_jellyfin_empty_host_uses_saved(monkeypatch):
+    """空 host 回退到已保存的 Jellyfin 地址（media_library.host 属性）。"""
+    from types import SimpleNamespace
+
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json={"ServerName": "s", "Version": "1"})
+
+    saved = SimpleNamespace(host="http://192.168.1.10:8096", api_key="savedkey")
+    monkeypatch.setattr(connectivity.settings, "media_library", saved)
+    with patch.object(connectivity, "_client", lambda **kw: _mock_client(handler)):
+        result = await connectivity.test_jellyfin("", "********")
+    assert result["ok"] is True
+    assert captured["url"].startswith("http://192.168.1.10:8096/System/Info")
