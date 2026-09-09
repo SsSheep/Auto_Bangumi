@@ -1,6 +1,6 @@
 # AutoBangumi（自用 Fork）
 
-基于 [AutoBangumi 3.3](https://github.com/EstrellaXD/Auto_Bangumi) 的增强版：自动追番、RSS 订阅、重命名一站式完成。本镜像自带 WebUI，单容器即可部署。
+基于 [AutoBangumi 3.3](https://github.com/EstrellaXD/Auto_Bangumi) 的自用 Fork：自动追番、RSS 订阅、重命名一站式完成。本镜像自带 WebUI，单容器即可部署。
 
 > 完整功能对比与使用说明见 [GitHub README](https://github.com/SsSheep/Auto_Bangumi)
 
