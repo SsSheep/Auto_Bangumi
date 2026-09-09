@@ -61,7 +61,7 @@ class EpisodeOverrideDatabase:
             return 0
         result = await self.session.execute(
             select(EpisodeStatusOverride).where(
-                EpisodeStatusOverride.bangumi_id.in_(bangumi_ids)  # type: ignore[union-attr]
+                EpisodeStatusOverride.bangumi_id.in_(bangumi_ids)  # type: ignore[attr-defined]
             )
         )
         rows = list(result.scalars().all())

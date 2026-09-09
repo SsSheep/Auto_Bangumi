@@ -307,9 +307,11 @@ def authed_client():
 
 
 def test_endpoints_require_auth():
+    from fastapi.routing import APIRoute
+
     from module.api.config import router
 
-    routes = {r.path: r for r in router.routes}
+    routes = {r.path: r for r in router.routes if isinstance(r, APIRoute)}
     for path in (
         "/config/test/tmdb",
         "/config/test/bgm",

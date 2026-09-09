@@ -37,7 +37,7 @@ class TorrentDatabase:
             return 0
         result = await self.session.execute(
             update(Torrent)
-            .where(Torrent.url.in_(urls))  # type: ignore[union-attr]
+            .where(Torrent.url.in_(urls))  # type: ignore[attr-defined]
             .values(downloaded=value)
         )
         await self.session.commit()
@@ -69,7 +69,7 @@ class TorrentDatabase:
         if not ids:
             return []
         result = await self.session.execute(
-            select(Torrent).where(Torrent.id.in_(ids))  # type: ignore[union-attr]
+            select(Torrent).where(Torrent.id.in_(ids))  # type: ignore[attr-defined]
         )
         return list(result.scalars().all())
 

@@ -140,9 +140,12 @@ class EpisodeOverviewService:
             return
 
         async def _fetch_group(group: BangumiEpisodeGroup, req: RequestContent):
-            key = (group.official_title, group.season, language)
+            # pending 入队前已过滤空标题
+            title = group.official_title
+            assert title is not None
+            key = (title, group.season, language)
             try:
-                info = await tmdb_parser(group.official_title, language)
+                info = await tmdb_parser(title, language)
                 if info is None:
                     _air_date_cache[key] = (time.monotonic(), None)
                     return
@@ -173,8 +176,11 @@ class EpisodeOverviewService:
             # 预算耗尽：被取消的分组记入失败缓存，避免每次打开都重试。
             # 注意不能用 finally 标记"已完成"——超时取消同样会触发 finally。
             for group in pending:
-                key = (group.official_title, group.season, language)
-                _air_date_cache.setdefault(key, (time.monotonic(), None))
+                title = group.official_title
+                if title:
+                    _air_date_cache.setdefault(
+                        (title, group.season, language), (time.monotonic(), None)
+                    )
             logger.warning(
                 "Air date fetch exceeded %.1fs budget; showing unknown dates.",
                 _AIR_DATE_BUDGET,
@@ -329,12 +335,16 @@ class EpisodeOverviewService:
                 resolution=parsed.resolution if parsed else None,
                 downloaded=torrent.downloaded,
             )
-            bangumi = bangumi_by_id.get(torrent.bangumi_id)
+            bangumi = (
+                bangumi_by_id.get(torrent.bangumi_id)
+                if torrent.bangumi_id is not None
+                else None
+            )
             # 未匹配番剧、或解析不出集数的种子进入 unparsed 列表
             if bangumi is None or parsed is None or parsed.episode is None:
-                if bangumi is not None:
-                    group = groups.setdefault(bangumi.id, self._new_group(bangumi))
-                    group.unparsed.append(info)
+                if bangumi is not None and bangumi.id is not None:
+                    ugroup = groups.setdefault(bangumi.id, self._new_group(bangumi))
+                    ugroup.unparsed.append(info)
                 else:
                     orphan_group.unparsed.append(info)
                 continue
@@ -384,9 +394,9 @@ class EpisodeOverviewService:
                 if group.bangumi_id is None:
                     continue
                 for entry in group.episodes:
-                    key = (group.bangumi_id, entry.season, float(entry.episode))
-                    if key in override_map:
-                        entry.in_library = override_map[key]
+                    okey = (group.bangumi_id, entry.season, float(entry.episode))
+                    if okey in override_map:
+                        entry.in_library = override_map[okey]
                         entry.manual = True
 
         for group in list(groups.values()) + [orphan_group]:

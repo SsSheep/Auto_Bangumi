@@ -133,7 +133,7 @@ def _chown_app_tree(path: Path) -> None:
     try:
         import pwd
 
-        pwd.getpwnam("ab")
+        pwd.getpwnam("ab")  # type: ignore[attr-defined]
     except (ImportError, KeyError):
         logger.warning("User 'ab' not found; skipping ownership fix for %s", path)
         return
@@ -239,7 +239,7 @@ def _sync_venv_to_lock(
         try:
             import pwd
 
-            pwd.getpwnam("ab")
+            pwd.getpwnam("ab")  # type: ignore[attr-defined]
         except (ImportError, KeyError):
             logger.error("User 'ab' not found; refusing to run uv sync as root.")
             return

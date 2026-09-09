@@ -246,6 +246,7 @@ class TestEpisodeOverview:
             mock_get.return_value = _feed_torrents()
             service = EpisodeOverviewService(db)
             overview = await service.overview(1)
+            assert overview is not None
 
         assert overview is not None
         assert len(overview.groups) == 1
@@ -277,6 +278,7 @@ class TestEpisodeOverview:
             mock_get.return_value = _feed_torrents()
             service = EpisodeOverviewService(db)
             overview = await service.overview(1)
+            assert overview is not None
 
         group = overview.groups[0]
         ep1 = next(e for e in group.episodes if e.episode == 1)
@@ -320,6 +322,8 @@ class TestEpisodeStatusOverride:
 
             overview = await service.overview(1)
 
+            assert overview is not None
+
         group = overview.groups[0]
         ep2 = next(e for e in group.episodes if e.episode == 2)
         assert ep2.in_library is True
@@ -351,6 +355,7 @@ class TestEpisodeStatusOverride:
             )
             assert resp.status is True
             overview = await service.overview(1)
+            assert overview is not None
 
         group = overview.groups[0]
         ep1 = next(e for e in group.episodes if e.episode == 1)
@@ -380,6 +385,7 @@ class TestEpisodeStatusOverride:
             )
             assert resp.status is True
             overview = await service.overview(1)
+            assert overview is not None
 
         ep1 = next(
             e for e in overview.groups[0].episodes if e.episode == 1
@@ -422,6 +428,7 @@ class TestEpisodeStatusOverride:
             )
             assert resp.status is True
             overview = await service.overview(1)
+            assert overview is not None
 
         episodes = {e.episode: e for e in overview.groups[0].episodes}
         # 第 1 集恢复自动（未覆盖），第 2 集的手动覆盖保留

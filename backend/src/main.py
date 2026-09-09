@@ -110,8 +110,7 @@ if VERSION != "DEV_VERSION":
         if path in _DIST_FILES:
             return FileResponse(f"dist/{path}")
         else:
-            context = {"request": request}
-            return templates.TemplateResponse("index.html", context)
+            return templates.TemplateResponse(request, "index.html")
 
 else:
 

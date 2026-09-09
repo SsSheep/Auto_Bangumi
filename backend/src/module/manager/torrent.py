@@ -416,7 +416,7 @@ class TorrentManager:
         archived_count = 0
         poster_count = 0
         weekday_count = 0
-        air_dates_cache: dict[tuple[str, int], list[dict]] = {}
+        air_dates_cache: dict[tuple[int, int], list[dict]] = {}
 
         async def _air_dates(tmdb_id: int, season: int) -> list[dict]:
             key = (tmdb_id, season)
