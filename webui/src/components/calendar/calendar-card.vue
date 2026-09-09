@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { ErrorPicture, Pin, Write, ListView } from '@icon-park/vue-next';
+import { ErrorPicture, ListView, Pin, Write } from '@icon-park/vue-next';
 import type { BangumiGroup } from './types';
 
 const props = defineProps<{

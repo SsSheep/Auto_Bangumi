@@ -12,7 +12,6 @@ from module.api.deps import get_context
 from module.manager import connectivity
 from module.security.api import get_current_user
 
-
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------

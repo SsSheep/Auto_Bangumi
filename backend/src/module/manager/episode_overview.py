@@ -198,7 +198,6 @@ class EpisodeOverviewService:
         （未启用/未配置/找不到剧集/接口错误）都按"不在库"处理，
         对应种子照常下载——宁可重复下载也不漏。
         """
-        conf = settings.media_library
         client = self._jellyfin_client()
         if client is None:
             return torrents, []
@@ -532,7 +531,9 @@ class EpisodeOverviewService:
             )
         ok, failed = await self._dispatch(targets)
         await self.db.torrent.upsert_all(targets)
-        await self.db.episode_cache.delete(rss_id)
+        # 清除对应订阅的总览缓存，让下次打开看到最新下载状态
+        for rid in {t.rss_id for t in targets if t.rss_id}:
+            await self.db.episode_cache.delete(rid)
         if failed:
             return ResponseModel(
                 status=False,

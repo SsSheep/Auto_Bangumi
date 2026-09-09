@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import { NTooltip } from 'naive-ui';
+
 /**
  * 单个数字 offset 行：标签 + 数字输入 + 可选的操作插槽（如"自动检测"按钮）。
  * ab-add-rss 用它承载 episode_offset + 检测按钮，ab-edit-rule 用它承载

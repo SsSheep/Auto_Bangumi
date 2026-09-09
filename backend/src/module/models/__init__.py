@@ -1,8 +1,6 @@
 from .auth import ApiToken, AuthSession
 from .bangumi import Bangumi, BangumiUpdate, Episode, Notification
 from .config import Config
-from .inbox import InboxMessage
-from .llm_credential import LLMCredential
 from .episode_cache import EpisodeOverviewCache
 from .episode_overview import (
     BangumiEpisodeGroup,
@@ -12,6 +10,8 @@ from .episode_overview import (
     EpisodeTorrentInfo,
 )
 from .episode_status import EpisodeStatusOverride
+from .inbox import InboxMessage
+from .llm_credential import LLMCredential
 from .movie import Movie, MovieUpdate
 from .passkey import Passkey, PasskeyCreate, PasskeyDelete, PasskeyList
 from .rename_operation import (

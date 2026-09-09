@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { NCheckbox, NRadioGroup, NRadioButton, NSpin } from 'naive-ui';
+import { NCheckbox, NRadioButton, NRadioGroup, NSpin } from 'naive-ui';
 import type { EpisodeOverview } from '#/episode';
 
 /**

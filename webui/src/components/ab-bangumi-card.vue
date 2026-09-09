@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { ErrorPicture, Write, ListView } from '@icon-park/vue-next';
+import { ErrorPicture, ListView, Write } from '@icon-park/vue-next';
 import type { BangumiRule } from '#/bangumi';
 
 const props = withDefaults(

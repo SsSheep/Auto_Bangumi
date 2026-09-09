@@ -238,6 +238,11 @@ function setSectionEl(id: string, el: unknown) {
   else sectionEls.delete(id);
 }
 
+// 平滑跳转进行中标记：到达目标或超时后恢复滚动联动。
+// 声明需先于 onScroll/jumpTo 的定义（no-use-before-define）。
+const isJumping = ref(false);
+let jumpTimer: ReturnType<typeof setTimeout> | null = null;
+
 function onScroll() {
   // 程序化跳转的平滑滚动进行中：高亮已由 jumpTo 直接设定，
   // 跳过滚动事件的中途重算，避免高亮扫过中间分区造成闪烁
@@ -265,10 +270,6 @@ function onScroll() {
   }
   activeSection.value = current;
 }
-
-// 平滑跳转进行中标记：到达目标或超时后恢复滚动联动
-const isJumping = ref(false);
-let jumpTimer: ReturnType<typeof setTimeout> | null = null;
 
 function jumpTo(id: string) {
   const el = sectionEls.get(id);

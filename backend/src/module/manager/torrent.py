@@ -7,8 +7,8 @@ from module.downloader import DownloadClient
 from module.downloader.path import gen_save_path
 from module.downloader.rules import build_rss_rule
 from module.models import Bangumi, BangumiUpdate, ResponseModel
-from module.parser import TitleParser
 from module.network import RequestContent
+from module.parser import TitleParser
 from module.parser.analyser.bgm_calendar import fetch_bgm_calendar, match_weekday
 from module.parser.analyser.tmdb_parser import (
     get_season_episode_air_dates,
