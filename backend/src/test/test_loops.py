@@ -41,6 +41,7 @@ class TestOffsetScanTick:
             mock_scanner_cls.return_value.scan_all = AsyncMock(return_value=[event])
             with patch("module.core.loops.settings") as mock_settings:
                 mock_settings.notification.enable = True
+                mock_settings.program.rss_time = 900
                 await offset_scan_tick(notifier)
 
         notifier.send_event.assert_awaited_once_with(event)
@@ -55,6 +56,7 @@ class TestOffsetScanTick:
             mock_scanner_cls.return_value.scan_all = AsyncMock(return_value=[event])
             with patch("module.core.loops.settings") as mock_settings:
                 mock_settings.notification.enable = False
+                mock_settings.program.rss_time = 900
                 await offset_scan_tick(notifier)
 
         notifier.send_event.assert_awaited_once_with(event)
@@ -67,6 +69,7 @@ class TestOffsetScanTick:
             mock_scanner_cls.return_value.scan_all = AsyncMock(return_value=[])
             with patch("module.core.loops.settings") as mock_settings:
                 mock_settings.notification.enable = True
+                mock_settings.program.rss_time = 900
                 await offset_scan_tick(notifier)
 
         notifier.send_event.assert_not_awaited()
@@ -107,6 +110,7 @@ class TestRssTick:
             patch("module.core.loops.settings") as mock_settings,
         ):
             mock_settings.notification.enable = True
+            mock_settings.program.rss_time = 900
             mock_settings.bangumi_manage.eps_complete = False
             await rss_tick(analyser, notifier)
 
@@ -133,6 +137,7 @@ class TestRssTick:
             patch("module.core.loops.settings") as mock_settings,
         ):
             mock_settings.notification.enable = False
+            mock_settings.program.rss_time = 900
             mock_settings.bangumi_manage.eps_complete = False
             await rss_tick(analyser, notifier)
 
@@ -166,6 +171,7 @@ class TestRenameTick:
             patch("module.core.loops.settings") as mock_settings,
         ):
             mock_settings.notification.enable = False
+            mock_settings.program.rss_time = 900
             await rename_tick(notifier)
 
         notifier.send_event.assert_awaited_once_with(event)
@@ -188,6 +194,7 @@ class TestRenameTick:
             patch("module.core.loops.settings") as mock_settings,
         ):
             mock_settings.notification.enable = True
+            mock_settings.program.rss_time = 900
             await rename_tick(notifier)
 
         notifier.send_all.assert_awaited_once_with(notify)
@@ -208,6 +215,7 @@ class TestRenameTick:
             patch("module.core.loops.settings") as mock_settings,
         ):
             mock_settings.notification.enable = False
+            mock_settings.program.rss_time = 900
             await rename_tick(notifier)
 
         notifier.send_all.assert_not_awaited()
@@ -240,6 +248,7 @@ class TestRenameTick:
             patch("module.core.loops.settings") as mock_settings,
         ):
             mock_settings.notification.enable = True
+            mock_settings.program.rss_time = 900
             start = time.perf_counter()
             await rename_tick(notifier)
             elapsed = time.perf_counter() - start
