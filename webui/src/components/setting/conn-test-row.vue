@@ -13,7 +13,7 @@ export interface ConnTestResult {
 }
 
 const props = defineProps<{
-  target: 'tmdb' | 'downloader' | 'jellyfin';
+  target: 'tmdb' | 'bgm' | 'downloader' | 'jellyfin';
   label: string;
   payload: () => Record<string, string>;
 }>();

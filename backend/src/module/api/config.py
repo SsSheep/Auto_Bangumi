@@ -229,6 +229,10 @@ class TmdbTestRequest(BaseModel):
     tmdb_api_key: str = ""
 
 
+class BgmTestRequest(BaseModel):
+    bgm_base_url: str = ""
+
+
 class DownloaderTestRequest(BaseModel):
     type: str = "qbittorrent"
     host: str = ""
@@ -256,6 +260,17 @@ async def test_tmdb_connectivity(req: TmdbTestRequest):
     from module.manager.connectivity import test_tmdb
 
     result = await test_tmdb(req.tmdb_base_url, req.tmdb_api_key)
+    return _test_result_payload(result)
+
+
+@router.post(
+    "/test/bgm", dependencies=[Depends(get_current_user)]
+)
+async def test_bgm_connectivity(req: BgmTestRequest):
+    """按表单当前值测试 Bangumi.tv API 连通性（放送日历端点）。"""
+    from module.manager.connectivity import test_bgm
+
+    result = await test_bgm(req.bgm_base_url)
     return _test_result_payload(result)
 
 

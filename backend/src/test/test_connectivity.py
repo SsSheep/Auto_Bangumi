@@ -98,6 +98,54 @@ async def test_tmdb_masked_key_falls_back_to_settings():
 
 
 # ---------------------------------------------------------------------------
+# Bangumi API
+# ---------------------------------------------------------------------------
+
+
+async def test_bgm_ok(patch_client):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/calendar"
+        return httpx.Response(200, json=[{}, {}, {}])
+
+    with patch_client(handler):
+        result = await connectivity.test_bgm("")
+    assert result["ok"] is True
+    assert result["detail"] == "3 天日历数据"
+
+
+async def test_bgm_custom_base_url(patch_client):
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json=[])
+
+    with patch_client(handler):
+        await connectivity.test_bgm("https://mirror.example/")
+    assert captured["url"].startswith("https://mirror.example/calendar")
+
+
+async def test_bgm_unreachable(patch_client):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("reset", request=request)
+
+    with patch_client(handler):
+        result = await connectivity.test_bgm("")
+    assert result["ok"] is False
+    assert "无法建立连接" in result["msg_zh"]
+
+
+async def test_bgm_server_error(patch_client):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503)
+
+    with patch_client(handler):
+        result = await connectivity.test_bgm("")
+    assert result["ok"] is False
+    assert "503" in result["msg_zh"]
+
+
+# ---------------------------------------------------------------------------
 # qBittorrent
 # ---------------------------------------------------------------------------
 
@@ -265,6 +313,7 @@ def test_endpoints_require_auth():
     routes = {r.path: r for r in router.routes}
     for path in (
         "/config/test/tmdb",
+        "/config/test/bgm",
         "/config/test/downloader",
         "/config/test/jellyfin",
     ):

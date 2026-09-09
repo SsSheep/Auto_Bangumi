@@ -44,7 +44,7 @@ export const apiConfig = {
    * 密码、密钥为掩码或空时，后端回退到已保存配置再测。
    */
   async testConnection(
-    target: 'tmdb' | 'downloader' | 'jellyfin',
+    target: 'tmdb' | 'bgm' | 'downloader' | 'jellyfin',
     payload: Record<string, string>
   ) {
     const { data } = await axios.post<{

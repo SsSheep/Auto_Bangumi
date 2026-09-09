@@ -55,6 +55,11 @@ const items: SettingItem<Network>[] = [
           tmdb_api_key: network.tmdb_api_key,
         })"
       />
+      <ConnTestRow
+        :label="t('config.network_set.test_conn_bgm')"
+        target="bgm"
+        :payload="() => ({ bgm_base_url: network.bgm_base_url })"
+      />
     </div>
   </ab-fold-panel>
 </template>

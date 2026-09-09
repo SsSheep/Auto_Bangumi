@@ -143,6 +143,40 @@ async def test_tmdb(base_url: str, api_key: str) -> dict:
     )
 
 
+async def test_bgm(base_url: str) -> dict:
+    """探测 Bangumi.tv API（放送日历端点，与应用实际调用一致；无需鉴权）。"""
+    base = (base_url or "").strip().rstrip("/") or "https://api.bgm.tv"
+    url = f"{base}/calendar"
+
+    start = time.perf_counter()
+    try:
+        async with _client(use_proxy=True) as client:
+            resp = await client.get(url)
+        latency = int((time.perf_counter() - start) * 1000)
+    except httpx.RequestError as e:
+        logger.info("bgm connectivity test failed: %s: %s", type(e).__name__, e)
+        return _network_error(e, int((time.perf_counter() - start) * 1000))
+
+    if resp.status_code == 200:
+        try:
+            days = len(resp.json())
+        except ValueError:
+            days = 0
+        return _result(
+            True,
+            latency,
+            "连接成功",
+            "Connected.",
+            detail=f"{days} 天日历数据" if days else None,
+        )
+    return _result(
+        False,
+        latency,
+        f"服务端返回 HTTP {resp.status_code}，请确认这是 Bangumi API 地址",
+        f"Server responded with HTTP {resp.status_code}; is this a Bangumi API address?",
+    )
+
+
 async def test_downloader(dl_type: str, host: str, username: str, password: str) -> dict:
     host = _normalize_host(host or "")
     password = _unmask(password, settings.downloader.password)

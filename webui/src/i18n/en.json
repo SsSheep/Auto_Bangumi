@@ -130,6 +130,8 @@
                                  },
                    "network_set":  {
                                        "test_conn":  "Test TMDB connection",
+
+                                       "test_conn_bgm":  "Test Bangumi API connection",
                                        "bgm_base_url":  "Bangumi API URL",
                                        "title":  "Network Setting",
                                        "tmdb_api_key":  "TMDB API Key (optional)",
