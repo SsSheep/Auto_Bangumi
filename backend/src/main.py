@@ -12,7 +12,7 @@ from fastapi.templating import Jinja2Templates
 
 from module.api import v1
 from module.api.health import router as health_router
-from module.conf import VERSION, settings, setup_logger
+from module.conf import VERSION, resolve_webui_port, settings, setup_logger
 from module.core import AppContext
 from module.mcp import create_mcp_app
 
@@ -128,6 +128,6 @@ if __name__ == "__main__":
     uvicorn.run(
         app,
         host=host,
-        port=settings.program.webui_port,
+        port=resolve_webui_port(),
         log_config=uvicorn_logging_config,
     )
