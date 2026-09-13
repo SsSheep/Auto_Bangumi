@@ -7,6 +7,7 @@ import pytest_asyncio
 
 from module.database import Database
 from module.manager.episode_overview import EpisodeOverviewService
+from module.models.episode_overview import EpisodeOverview
 from module.rss.engine import (
     RSSEngine,
     _bangumi_check_due,
@@ -674,3 +675,100 @@ class TestOverrideEmptyLibraryExpiry:
         ep1 = next(e for e in overview.groups[0].episodes if e.episode == 1)
         assert ep1.in_library is False and ep1.manual is True
         assert overview.overrides_updated == 0
+
+
+# ---------------------------------------------------------------------------
+# 缓存健壮性：空壳重建 / 报文拉取失败不覆盖缓存
+# ---------------------------------------------------------------------------
+
+
+class TestCacheRobustness:
+    async def test_empty_shell_cache_is_rebuilt(self, db, monkeypatch):
+        """groups 为空的缓存（构建失败残留）视为无效，直接重建。"""
+        await db.rss.add(make_rss_item())
+        await db.bangumi.add(make_bangumi(filter=""))
+        stored = make_torrent(
+            name="[TestGroup] Test Anime Raw - 01 [1080p].mkv",
+            url="https://example.com/ep1.torrent",
+            rss_id=1,
+            bangumi_id=1,
+        )
+        await db.torrent.add(stored)
+        # 预置一个空壳缓存（fresh built_at，不会因 TTL 过期）
+        from datetime import datetime, timezone
+
+        await db.episode_cache.save(
+            1,
+            EpisodeOverview(jellyfin_available=False, groups=[]).json(),
+            datetime.now(timezone.utc).isoformat(),
+        )
+
+        from module.manager import episode_overview as eo
+
+        monkeypatch.setattr(
+            eo.EpisodeOverviewService, "_jellyfin_client", lambda _: None
+        )
+        with patch.object(
+            RSSEngine, "_get_torrents", new_callable=AsyncMock
+        ) as mock_get, patch.object(
+            EpisodeOverviewService, "_apply_air_dates", new_callable=AsyncMock
+        ):
+            mock_get.return_value = _feed_torrents()
+            overview = await EpisodeOverviewService(db).overview(1)
+            assert overview is not None
+
+        # 空壳被重建：groups 非空
+        assert overview.groups, "empty shell cache must be rebuilt"
+
+    async def test_force_refresh_failure_raises_and_keeps_cache(
+        self, db, monkeypatch
+    ):
+        """报文抓取失败：force 抛 OverviewFetchError，旧缓存保留不被覆盖。"""
+        import pytest as _pytest
+
+        from module.manager.episode_overview import OverviewFetchError
+
+        await db.rss.add(make_rss_item())
+        await db.bangumi.add(make_bangumi(filter=""))
+        # 预置有效旧缓存
+        old = EpisodeOverview(jellyfin_available=False, groups=[])
+        from datetime import datetime, timezone
+
+        await db.episode_cache.save(
+            1, old.json(), datetime.now(timezone.utc).isoformat()
+        )
+
+        from module.manager import episode_overview as eo
+
+        monkeypatch.setattr(
+            eo.EpisodeOverviewService, "_jellyfin_client", lambda _: None
+        )
+        with patch.object(
+            RSSEngine, "_get_torrents", new_callable=AsyncMock
+        ) as mock_get, patch.object(
+            EpisodeOverviewService, "_apply_air_dates", new_callable=AsyncMock
+        ):
+            mock_get.side_effect = RuntimeError("network down")
+            service = EpisodeOverviewService(db)
+            with _pytest.raises(OverviewFetchError):
+                await service.overview(1, force=True)
+
+        # 旧缓存仍在且未被失败结果覆盖
+        cache = await db.episode_cache.get(1)
+        assert cache is not None and cache.payload == old.json()
+
+    async def test_non_force_failure_returns_none_keeps_cache(
+        self, db, monkeypatch
+    ):
+        """非强制路径抓取失败：返回 None（调用方当未找到），缓存保留。"""
+        from module.manager import episode_overview as eo
+
+        await db.rss.add(make_rss_item())
+        with patch.object(
+            RSSEngine, "_get_torrents", new_callable=AsyncMock
+        ) as mock_get, patch.object(
+            EpisodeOverviewService, "_apply_air_dates", new_callable=AsyncMock
+        ):
+            mock_get.side_effect = RuntimeError("network down")
+            result = await EpisodeOverviewService(db).overview(1)
+        assert result is None

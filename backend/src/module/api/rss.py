@@ -6,6 +6,7 @@ from module.conf.search_provider import get_provider
 from module.database import Database, get_db
 from module.downloader import DownloadClient
 from module.manager import EpisodeOverviewService, SeasonCollector
+from module.manager.episode_overview import OverviewFetchError
 from module.models import (
     APIResponse,
     Bangumi,
@@ -212,7 +213,14 @@ async def get_episodes_overview(
     优先返回缓存；``refresh=true`` 强制重新拉取报文并更新缓存。
     """
     service = EpisodeOverviewService(db)
-    overview = await service.overview(rss_id, force=refresh)
+    try:
+        overview = await service.overview(rss_id, force=refresh)
+    except OverviewFetchError as e:
+        # 强制刷新时报文抓取失败：保留旧缓存并明确报错（前端 toast 提示）
+        return JSONResponse(
+            status_code=503,
+            content={"msg_en": str(e), "msg_zh": "拉取 RSS 报文失败，总览未更新，请稍后重试。"},
+        )
     if overview is None:
         return JSONResponse(
             status_code=404,

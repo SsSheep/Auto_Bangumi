@@ -53,6 +53,10 @@ _air_date_cache: dict[
 ] = {}
 
 
+class OverviewFetchError(Exception):
+    """剧集总览构建时 RSS 报文抓取失败（手动刷新时向调用方暴露）。"""
+
+
 class EpisodeOverviewService:
     def __init__(self, db: Database):
         self.db = db
@@ -69,14 +73,23 @@ class EpisodeOverviewService:
             check_interval=bangumi.check_interval,
         )
 
-    async def _live_and_stored(self, rss) -> tuple[list[Torrent], dict[str, Torrent]]:
-        """拉取实时报文并与本地记录合并（保留 id/downloaded/bangumi_id）。"""
+    async def _live_and_stored(
+        self, rss
+    ) -> tuple[list[Torrent], dict[str, Torrent], bool]:
+        """拉取实时报文并与本地记录合并（保留 id/downloaded/bangumi_id）。
+
+        第三个返回值为 ``fetch_failed``：报文抓取环节彻底失败（网络层
+        异常）。调用方据此决定**不覆盖缓存**——把"拉取失败"持久化成
+        空总览，会让界面显示空白且按计划长期不被重建（历史缺陷）。
+        """
         engine = RSSEngine(self.db)
+        fetch_failed = False
         try:
             live_torrents = await engine._get_torrents(rss)
         except Exception as e:
             logger.warning("Failed to fetch RSS feed %s: %s", rss.name, e)
             live_torrents = []
+            fetch_failed = True
         stored = await self.db.torrent.search_rss(rss.id)
         stored_by_url: dict[str, Torrent] = {}
         for torrent in stored:
@@ -109,7 +122,7 @@ class EpisodeOverviewService:
             seen_urls.add(torrent.url)
         # 本地有、报文已翻页看不到的记录也保留（历史下载）
         merged.extend(t for t in stored if t.url not in seen_urls)
-        return merged, stored_by_url
+        return merged, stored_by_url, fetch_failed
 
     async def _apply_air_dates(self, groups: dict[int, BangumiEpisodeGroup]) -> None:
         """自动获取 TMDB 放送日期并写入对应分组。
@@ -284,6 +297,12 @@ class EpisodeOverviewService:
 
         缓存在该订阅的检查计划（间隔/每周定时，无计划则全局轮询周期）
         到期后自动重建；``force=True``（手动刷新）立即重建并更新缓存。
+
+        两条健壮性规则（历史缺陷修复）：
+        - ``groups`` 为空的缓存视为无效（构建失败残留），不作为读结果；
+        - 报文抓取失败时**不覆盖缓存**——失败不该被持久化成空总览；
+          ``force`` 刷新失败时向调用方抛错（前端提示刷新失败），
+          非强制路径则保留旧缓存照常返回。
         """
         rss = await self.db.rss.search_id(rss_id)
         if not rss:
@@ -302,28 +321,48 @@ class EpisodeOverviewService:
                     cached = None
                     built_at = None
                 if cached is not None and built_at is not None:
-                    ids = [
-                        g.bangumi_id
-                        for g in cached.groups
-                        if g.bangumi_id is not None
-                    ]
-                    bangumis = (
-                        await self.db.bangumi.search_ids(ids) if ids else []
-                    )
-                    if not self._cache_stale(bangumis, built_at, now):
-                        cached.cached_at = cache.built_at
-                        return cached
+                    if not cached.groups:
+                        # 空壳缓存：构建失败的残留，视为无效，走重建
+                        logger.warning(
+                            "Episode overview cache for rss %s is empty; rebuilding.",
+                            rss_id,
+                        )
+                    else:
+                        ids = [
+                            g.bangumi_id
+                            for g in cached.groups
+                            if g.bangumi_id is not None
+                        ]
+                        bangumis = (
+                            await self.db.bangumi.search_ids(ids) if ids else []
+                        )
+                        if not self._cache_stale(bangumis, built_at, now):
+                            cached.cached_at = cache.built_at
+                            return cached
 
-        overview = await self._build_overview(rss)
+        overview, fetch_failed = await self._build_overview(rss)
         if overview is None:
+            return None
+        if fetch_failed:
+            message = (
+                f"Failed to fetch RSS feed for {rss.name}; "
+                "overview not updated."
+            )
+            if force:
+                # 手动刷新失败要让用户知道：保留旧缓存（如有）并报错
+                raise OverviewFetchError(message)
+            logger.warning(message)
             return None
         built_iso = now.isoformat()
         overview.cached_at = built_iso
         await self.db.episode_cache.save(rss_id, overview.json(), built_iso)
         return overview
 
-    async def _build_overview(self, rss) -> EpisodeOverview | None:
-        merged, _ = await self._live_and_stored(rss)
+    async def _build_overview(
+        self, rss
+    ) -> tuple[EpisodeOverview | None, bool]:
+        """构建总览；第二个返回值为报文抓取是否失败（失败时不缓存）。"""
+        merged, _, fetch_failed = await self._live_and_stored(rss)
         bangumi_list = await self.db.bangumi.search_all()
         bangumi_by_id = {b.id: b for b in bangumi_list if b.id is not None}
 
@@ -439,10 +478,13 @@ class EpisodeOverviewService:
         result_groups = list(groups.values())
         if orphan_group.unparsed:
             result_groups.append(orphan_group)
-        return EpisodeOverview(
-            jellyfin_available=jellyfin_available,
-            groups=result_groups,
-            overrides_updated=overrides_updated,
+        return (
+            EpisodeOverview(
+                jellyfin_available=jellyfin_available,
+                groups=result_groups,
+                overrides_updated=overrides_updated,
+            ),
+            fetch_failed,
         )
 
     async def set_status(self, rss_id: int, req: EpisodeStatusRequest) -> ResponseModel:
@@ -477,7 +519,7 @@ class EpisodeOverviewService:
             )
 
         if req.reset_all:
-            merged, _ = await self._live_and_stored(rss)
+            merged, _, _ = await self._live_and_stored(rss)
             bangumi_ids = {t.bangumi_id for t in merged if t.bangumi_id}
             await self.db.episode_override.delete_by_bangumi_ids(list(bangumi_ids))
         elif req.reset_episodes:
@@ -488,7 +530,7 @@ class EpisodeOverviewService:
                 )
         elif req.reset_urls:
             # 只重置勾选种子对应的剧集覆盖
-            merged, _ = await self._live_and_stored(rss)
+            merged, _, _ = await self._live_and_stored(rss)
             url_set = set(req.reset_urls)
             seen: set[tuple[int, int, float]] = set()
             for torrent in merged:
@@ -518,7 +560,7 @@ class EpisodeOverviewService:
             )
 
         if req.set_downloaded is not None and req.urls:
-            merged, _ = await self._live_and_stored(rss)
+            merged, _, _ = await self._live_and_stored(rss)
             url_set = set(req.urls)
             targets = [t for t in merged if t.url in url_set]
             for torrent in targets:
@@ -617,7 +659,7 @@ class EpisodeOverviewService:
                 msg_en="RSS not found.",
                 msg_zh="未找到该 RSS 订阅。",
             )
-        merged, stored_by_url = await self._live_and_stored(rss)
+        merged, stored_by_url, _ = await self._live_and_stored(rss)
         url_set = set(urls)
         candidates: list[Torrent] = []
         for torrent in merged:
