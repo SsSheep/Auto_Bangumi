@@ -18,8 +18,11 @@ class RequestContent(RequestURL):
         _filter: str | None = None,
         limit: int | None = None,
         retry: int = 3,
-    ) -> list[Torrent]:
+    ) -> list[Torrent] | None:
+        """拉取并过滤报文；返回 ``None`` 表示拉取/解析失败（网络层已重试）。"""
         soup = await self.get_xml(_url, retry)
+        if soup is None:
+            return None
         if soup:
             parsed_items = rss_parser(soup)
             torrents: list[Torrent] = []

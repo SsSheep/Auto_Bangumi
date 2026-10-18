@@ -173,6 +173,10 @@ def _rss_fetch_due(item: RSSItem, bangumi_list: list[Bangumi], now: datetime) ->
     return any(_bangumi_check_due(b, now) for b in linked)
 
 
+class RSSFetchError(Exception):
+    """RSS 报文拉取/解析失败（网络层重试耗尽或返回非 XML 内容）。"""
+
+
 class RSSEngine:
     def __init__(self, db: Database):
         self.db = db
@@ -183,6 +187,10 @@ class RSSEngine:
     async def _get_torrents(rss: RSSItem) -> list[Torrent]:
         async with RequestContent() as req:
             torrents = await req.get_torrents(rss.url)
+            if torrents is None:
+                # 报文拉取失败（网络/解析）：必须与"真空报文"区分。
+                # 静默返回空列表会让剧集总览把失败持久化成空缓存。
+                raise RSSFetchError(f"Failed to fetch RSS feed: {rss.url}")
             # Add RSS ID
             for torrent in torrents:
                 torrent.rss_id = rss.id
@@ -616,7 +624,7 @@ class RSSEngine:
             )
         async with RequestContent() as req:
             filter_pattern = movie.filter.replace(",", "|") if movie.filter else ""
-            torrents = await req.get_torrents(movie.rss_link, filter_pattern)
+            torrents = await req.get_torrents(movie.rss_link, filter_pattern) or []
             if torrents:
                 async with DownloadClient() as client:
                     result = await client.add_torrent(
@@ -651,6 +659,14 @@ class RSSEngine:
             torrents = await req.get_torrents(
                 bangumi.rss_link, bangumi.filter.replace(",", "|")
             )
+            if torrents is None:
+                # 报文拉取失败：与"空报文"区分，明确返回失败
+                return ResponseModel(
+                    status=False,
+                    status_code=502,
+                    msg_en=f"Download {bangumi.official_title} failed.",
+                    msg_zh=f"下载 {bangumi.official_title} 失败。",
+                )
             if torrents:
                 if skip_in_library:
                     # 先查 Jellyfin，库里已有的集不下载（失败视为不在库）。

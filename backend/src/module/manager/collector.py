@@ -53,7 +53,7 @@ class SeasonCollector:
             async with RequestContent() as req:
                 torrents = await req.get_torrents(
                     link, bangumi.filter.replace(",", "|")
-                )
+                ) or []
         async with Database() as db:
             # bangumi 必须先落库拿到 id：add_torrent 用它打 ab:<id> 标签，
             # 种子行也要用它关联 bangumi_id——否则种子会被记成孤儿，

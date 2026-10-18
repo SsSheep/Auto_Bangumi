@@ -46,7 +46,7 @@ class SearchTorrent:
 
     async def search_torrents(self, rss_item: RSSItem) -> list[Torrent]:
         async with RequestContent() as req:
-            return await req.get_torrents(rss_item.url)
+            return await req.get_torrents(rss_item.url) or []
 
     async def _fetch_tmdb_preview(self, title: str) -> tuple[str | None, str | None]:
         """Fetch localized title and poster URL from TMDB for search previews."""

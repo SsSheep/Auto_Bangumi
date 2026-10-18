@@ -772,3 +772,86 @@ class TestCacheRobustness:
             mock_get.side_effect = RuntimeError("network down")
             result = await EpisodeOverviewService(db).overview(1)
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# 报文拉取失败必须与"空报文"区分（RequestContent.get_torrents 返回 None）
+# ---------------------------------------------------------------------------
+
+
+class TestFetchFailureSignal:
+    async def test_failed_fetch_marks_signal_and_keeps_cache(self, db, monkeypatch):
+        """get_torrents 返回 None（拉取失败）→ fetch_failed 置位，缓存不被空总览覆盖。"""
+        from datetime import datetime, timezone
+
+        from module.manager import episode_overview as eo
+
+        await db.rss.add(make_rss_item())
+        await db.bangumi.add(make_bangumi(filter=""))
+        stored = make_torrent(
+            name="[TestGroup] Test Anime Raw - 01 [1080p].mkv",
+            url="https://example.com/ep1.torrent",
+            rss_id=1,
+            bangumi_id=1,
+        )
+        await db.torrent.add(stored)
+        old = EpisodeOverview(jellyfin_available=False, groups=[])
+        await db.episode_cache.save(
+            1, old.json(), datetime.now(timezone.utc).isoformat()
+        )
+
+        class _FakeEngine:
+            def __init__(self, db):
+                pass
+
+            async def _get_torrents(self, rss):
+                # 现行为：engine 对拉取失败抛 RSSFetchError（不再静默返 None）
+                from module.rss.engine import RSSFetchError
+
+                raise RSSFetchError("Failed to fetch RSS feed")
+
+        monkeypatch.setattr(eo, "RSSEngine", _FakeEngine)
+        monkeypatch.setattr(
+            eo.EpisodeOverviewService, "_jellyfin_client", lambda _: None
+        )
+        service = EpisodeOverviewService(db)
+        merged, _, fetch_failed = await service._live_and_stored(
+            await db.rss.search_id(1)
+        )
+        assert fetch_failed is True
+        assert merged  # 库里历史种子仍在
+
+        # force 路径：抛错且缓存保留
+        import pytest as _pytest
+
+        from module.manager.episode_overview import OverviewFetchError
+
+        with _pytest.raises(OverviewFetchError):
+            await service.overview(1, force=True)
+        cache = await db.episode_cache.get(1)
+        assert cache is not None and cache.payload == old.json()
+
+    async def test_engine_raises_on_failed_fetch(self, monkeypatch):
+        """engine._get_torrents 对 None（拉取失败）抛 RSSFetchError。"""
+        from module.models import RSSItem
+        from module.rss.engine import RSSEngine, RSSFetchError
+
+        class _FakeReq:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get_torrents(self, url, _filter=None, limit=None, retry=3):
+                return None  # 拉取失败
+
+        import asyncio
+
+        import module.rss.engine as engine_mod
+
+        rss = RSSItem(id=1, url="https://example.com/rss", name="t")
+        # monkeypatch 替换类属性（mypy 不允许直接对类型赋值）
+        monkeypatch.setattr(engine_mod, "RequestContent", _FakeReq)
+        with pytest.raises(RSSFetchError):
+            await RSSEngine._get_torrents(rss)
