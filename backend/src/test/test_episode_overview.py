@@ -21,6 +21,23 @@ async def db(db_engine):
     return Database(engine=db_engine)
 
 
+@pytest.fixture(autouse=True)
+async def _clean_shared_client():
+    """清理模块级共享 httpx 客户端。
+
+    本文件的多个测试会经 RequestContent.__aenter__ 触发共享客户端创建；
+    若测试以异常收尾，客户端会绑定已结束的事件循环存活到后续测试文件
+    （如 test_request_url.py），导致其 "Event loop is closed"。
+    """
+    yield
+    import module.network.request_url as _mod
+
+    if _mod._shared_client is not None:
+        await _mod._shared_client.aclose()
+        _mod._shared_client = None
+        _mod._shared_client_proxy_key = None
+
+
 # ---------------------------------------------------------------------------
 # per-subscription check interval
 # ---------------------------------------------------------------------------
